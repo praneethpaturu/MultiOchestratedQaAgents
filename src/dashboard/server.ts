@@ -121,19 +121,45 @@ app.get("/api/memory", (req, res) => {
 });
 
 app.get("/api/agents", (_req, res) => {
-  // Load .md agent definitions
-  const agentsDir = path.resolve(process.cwd(), "agents");
-  if (!fs.existsSync(agentsDir)) { res.json([]); return; }
-  const files = fs.readdirSync(agentsDir).filter(f => f.endsWith(".md"));
-  const agents = files.map(f => {
-    const content = fs.readFileSync(path.join(agentsDir, f), "utf-8");
-    const name = content.match(/^# Agent:\s*(.+)/m)?.[1] ?? f;
-    const model = content.match(/^## Model\s*\n(.+)/m)?.[1]?.trim() ?? "unknown";
-    // Extract tools ONLY from the "## MCP Tools Used" section
-    const toolSection = content.match(/## MCP Tools Used\s*\n([\s\S]*?)(?=\n## |\n# |$)/)?.[1] ?? "";
-    const tools = (toolSection.match(/^- `(\w+)`/gm) ?? []).map(t => t.replace(/^- `|`$/g, ""));
-    return { slug: f.replace(".md", ""), name: name.trim(), model, tools, file: f };
-  });
+  const agents: any[] = [];
+
+  // Load VS Code Copilot agents from .github/agents/ (primary)
+  const copilotAgentsDir = path.resolve(process.cwd(), ".github", "agents");
+  if (fs.existsSync(copilotAgentsDir)) {
+    const files = fs.readdirSync(copilotAgentsDir).filter(f => f.endsWith(".agent.md"));
+    for (const f of files) {
+      const content = fs.readFileSync(path.join(copilotAgentsDir, f), "utf-8");
+      // Parse YAML frontmatter
+      const frontmatter = content.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+      const name = frontmatter.match(/^name:\s*(.+)/m)?.[1]?.replace(/['"]/g, "").trim() ?? f;
+      const description = frontmatter.match(/^description:\s*(.+)/m)?.[1]?.replace(/['"]/g, "").trim() ?? "";
+      const modelMatch = frontmatter.match(/^model:\s*\n\s*-\s*'([^']+)'/m) ?? frontmatter.match(/^model:\s*'([^']+)'/m);
+      const model = modelMatch?.[1] ?? "unknown";
+      const tools = (frontmatter.match(/-\s*'([^']+)'/g) ?? [])
+        .map(t => t.replace(/-\s*'|'/g, ""))
+        .filter(t => !t.startsWith("GPT") && !t.startsWith("Claude")); // exclude model entries
+      const slug = f.replace(".agent.md", "");
+      agents.push({ slug, name, description, model, tools, file: `.github/agents/${f}`, source: "copilot" });
+    }
+  }
+
+  // Also load legacy agents from agents/ directory (for backward compatibility)
+  const legacyDir = path.resolve(process.cwd(), "agents");
+  if (fs.existsSync(legacyDir)) {
+    const files = fs.readdirSync(legacyDir).filter(f => f.endsWith(".md"));
+    for (const f of files) {
+      const slug = f.replace("-agent.md", "").replace(".md", "");
+      // Skip if already loaded from .github/agents/
+      if (agents.some(a => a.slug === slug)) continue;
+      const content = fs.readFileSync(path.join(legacyDir, f), "utf-8");
+      const name = content.match(/^# Agent:\s*(.+)/m)?.[1]?.trim() ?? f;
+      const model = content.match(/^## Model\s*\n(.+)/m)?.[1]?.trim() ?? "unknown";
+      const toolSection = content.match(/## MCP Tools Used\s*\n([\s\S]*?)(?=\n## |\n# |$)/)?.[1] ?? "";
+      const tools = (toolSection.match(/^- `(\w+)`/gm) ?? []).map(t => t.replace(/^- `|`$/g, ""));
+      agents.push({ slug, name, model, tools, file: `agents/${f}`, source: "legacy" });
+    }
+  }
+
   res.json(agents);
 });
 
