@@ -1,8 +1,8 @@
 import { Command } from "commander";
 import { runEngine } from "./engine.js";
 import { loadAllAgents } from "./agentLoader.js";
-import { initMCPServer, listTools } from "../mcp/server.js";
-import { clearMemory, queryMemory } from "../memory/store.js";
+import { initMCPServer, listTools, executeTool } from "../mcp/server.js";
+import { clearMemory } from "../memory/store.js";
 import { logger } from "../utils/logger.js";
 import { config } from "../config/index.js";
 
@@ -119,11 +119,13 @@ export function createCLI(): Command {
     .description("List memory entries")
     .option("-t, --type <type>", "Filter by type")
     .option("-n, --limit <n>", "Limit results", parseInt)
-    .action((opts) => {
-      const entries = queryMemory({
+    .action(async (opts) => {
+      initMCPServer();
+      const result = await executeTool("retrieveMemory", {
         type: opts.type,
         limit: opts.limit ?? 20,
       });
+      const entries = (result.result as any)?.entries ?? [];
       if (entries.length === 0) {
         console.log("No memory entries found.");
         return;
@@ -131,7 +133,7 @@ export function createCLI(): Command {
       console.log(`\nMemory entries (${entries.length}):\n`);
       for (const entry of entries) {
         console.log(
-          `  [${entry.type}] ${entry.testName ?? entry.storyId ?? "—"} | ${entry.timestamp}`
+          `  [${entry.type}] ${entry.key ?? "—"} | ${entry.timestamp}`
         );
         console.log(`    ${JSON.stringify(entry.data).slice(0, 120)}`);
       }
