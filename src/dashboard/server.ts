@@ -198,10 +198,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
 /* Cards grid */
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
-.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;cursor:pointer;transition:all .15s}
+.stat-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.3)}
+.stat-card:active{transform:translateY(0)}
 .stat-card .label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px}
 .stat-card .value{font-size:28px;font-weight:700;color:var(--accent)}
 .stat-card .sub{font-size:12px;color:var(--muted);margin-top:2px}
+.stat-card .click-hint{font-size:10px;color:var(--border);margin-top:6px;transition:color .15s}
+.stat-card:hover .click-hint{color:var(--accent)}
 .stat-card.green .value{color:var(--green)}
 .stat-card.red .value{color:var(--red)}
 .stat-card.orange .value{color:var(--orange)}
@@ -499,20 +503,48 @@ function renderAll() {
   document.getElementById('logCount').textContent = data.logs.length;
 }
 
+// ─── Navigate to tab ───
+function goToTab(tabName, filterType) {
+  // Activate the tab
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const tab = document.querySelector('.tab[data-tab="'+tabName+'"]');
+  if (tab) tab.classList.add('active');
+  const panel = document.getElementById('panel-'+tabName);
+  if (panel) panel.classList.add('active');
+  // Apply filter if specified
+  if (filterType && tabName === 'memory') {
+    const sel = document.getElementById('memTypeFilter');
+    if (sel) { sel.value = filterType; renderMemory(); }
+  }
+  if (filterType && tabName === 'tests') {
+    const sel = document.getElementById('testTypeFilter');
+    if (sel) { sel.value = filterType; renderTests(); }
+  }
+  // Scroll to top
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 // ─── Overview ───
 function renderOverview() {
   const s = data.summary;
   const cards = [
-    { label:'Agent Logs', value:s.totalLogs||0, cls:'', sub: s.lastActivity ? 'Last: '+fmtTime(s.lastActivity) : '' },
-    { label:'RCA Results', value:s.totalRCA||0, cls:'purple', sub:Object.entries(s.categories||{}).map(([k,v])=>k+': '+v).join(', ')||'None' },
-    { label:'Bugs Filed', value:s.totalBugs||0, cls:'red', sub:'' },
-    { label:'Test Artifacts', value:s.totalTests||0, cls:'green', sub:'' },
-    { label:'Failures', value:s.totalFailures||0, cls:s.totalFailures>0?'orange':'green', sub:'' },
-    { label:'Selector Fixes', value:s.totalSelectorFixes||0, cls:'', sub:'Self-healing' },
-    { label:'Active Agents', value:(s.activeAgents||[]).length, cls:'', sub:(s.activeAgents||[]).join(', ')||'None in last hour' },
+    { label:'Agent Logs', value:s.totalLogs||0, cls:'', tab:'logs', filter:'', icon:'📋', sub: s.lastActivity ? 'Last: '+fmtTime(s.lastActivity) : '' },
+    { label:'RCA Results', value:s.totalRCA||0, cls:'purple', tab:'rca', filter:'', icon:'🔍', sub:Object.entries(s.categories||{}).map(([k,v])=>k+': '+v).join(', ')||'None' },
+    { label:'Bugs Filed', value:s.totalBugs||0, cls:'red', tab:'bugs', filter:'', icon:'🐛', sub:'' },
+    { label:'Test Artifacts', value:s.totalTests||0, cls:'green', tab:'tests', filter:'', icon:'🧪', sub:'' },
+    { label:'Failures', value:s.totalFailures||0, cls:s.totalFailures>0?'orange':'green', tab:'tests', filter:'failure', icon:'❌', sub:'' },
+    { label:'Selector Fixes', value:s.totalSelectorFixes||0, cls:'', tab:'memory', filter:'selector_fix', icon:'🔗', sub:'Self-healing' },
+    { label:'Active Agents', value:(s.activeAgents||[]).length, cls:'', tab:'agents', filter:'', icon:'🤖', sub:(s.activeAgents||[]).join(', ')||'None in last hour' },
+    { label:'Memory Entries', value:data.memory.length||0, cls:'', tab:'memory', filter:'', icon:'🧠', sub:'' },
   ];
   document.getElementById('statsGrid').innerHTML = cards.map(c =>
-    '<div class="stat-card '+c.cls+'"><div class="label">'+c.label+'</div><div class="value">'+c.value+'</div>'+(c.sub?'<div class="sub">'+esc(trunc(c.sub,60))+'</div>':'')+'</div>'
+    '<div class="stat-card '+c.cls+'" onclick="goToTab(\\''+c.tab+'\\',\\''+c.filter+'\\')">'
+    + '<div class="label">'+c.icon+' '+c.label+'</div>'
+    + '<div class="value">'+c.value+'</div>'
+    + (c.sub?'<div class="sub">'+esc(trunc(c.sub,60))+'</div>':'')
+    + '<div class="click-hint">Click to view →</div>'
+    + '</div>'
   ).join('');
 
   // Timeline
