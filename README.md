@@ -6,7 +6,7 @@ An autonomous, production-ready QA system powered by **8 specialized AI agents**
 
 ## Highlights
 
-- **6 Copilot `.md` agents** — each with role, model, inputs, outputs, MCP tools, instructions, constraints, and examples
+- **8 Copilot `.md` agents** — each with role, model, inputs, outputs, MCP tools, instructions, constraints, and examples
 - **14 MCP tools** across 5 modules (ADO, Playwright, Memory, RCA, Logging) exposed via a JSON-RPC MCP server
 - **Orchestrator engine** that loads `.md` agent definitions, feeds them as LLM prompts, and routes all tool calls through MCP
 - **GitHub Copilot Extension** — SSE streaming server for VS Code Copilot Chat with 8 slash commands
@@ -53,6 +53,19 @@ An autonomous, production-ready QA system powered by **8 specialized AI agents**
     Dashboard reads from Memory + Logs in real-time
 ```
 
+### Agents (8)
+
+| # | Agent | File | Role | MCP Tools |
+|---|-------|------|------|-----------|
+| 1 | **Orchestrator** | `orchestrator-agent.md` | Central brain — routes to sub-agents, manages pipeline lifecycle | `saveMemory`, `retrieveMemory`, `logEvent`, `runTests`, `getFailures`, `createBug`, `linkBugToStory` |
+| 2 | **Clarifier** | `clarifier-agent.md` | Identifies ambiguities, asks targeted questions with defaults | `getUserStory`, `retrieveMemory`, `saveMemory`, `logEvent` |
+| 3 | **Requirement Analyst** | `requirement-agent.md` | Extracts scenarios, acceptance criteria, edge cases from stories | `getUserStory`, `logEvent`, `saveMemory` |
+| 4 | **Test Designer** | `test-designer-agent.md` | Creates prioritized, structured test cases from requirements | `retrieveMemory`, `saveMemory`, `logEvent` |
+| 5 | **Automation Engineer** | `automation-agent.md` | Generates Playwright TypeScript tests with POM pattern | `generateTest`, `retrieveMemory`, `saveMemory` |
+| 6 | **Maintenance & Fix** | `maintenance-agent.md` | Diagnoses and fixes broken locators, waits, and flows | `getFailures`, `generateTest`, `retrieveMemory`, `saveMemory`, `logEvent` |
+| 7 | **RCA** | `rca-agent.md` | Deep root cause analysis — 7 categories, confidence scoring | `analyzeLogs`, `findSimilarFailures`, `calculateConfidence`, `saveMemory`, `logEvent` |
+| 8 | **Reviewer** | `reviewer-agent.md` | Governance gate — 8 criteria, scores 0-100, rejects on blockers | `retrieveMemory`, `logEvent` |
+
 ---
 
 ## Quick Start
@@ -71,7 +84,7 @@ cp .env.example .env
 # Edit .env — fill in ADO_ORG, ADO_PROJECT, ADO_TOKEN, API keys
 
 # 4. Verify everything works
-npx tsx src/index.ts agents    # List 6 .md agents
+npx tsx src/index.ts agents    # List 8 .md agents
 npx tsx src/index.ts tools     # List 14 MCP tools
 npx tsx src/index.ts config    # Show model routing
 
@@ -89,7 +102,9 @@ npx tsx src/index.ts run --story-id 12345
 
 ```
 qa-agents/
-  agents/                         # .md Copilot agent definitions
+  agents/                         # .md Copilot agent definitions (8 agents)
+    orchestrator-agent.md         #   Central brain — routes to sub-agents, manages pipeline
+    clarifier-agent.md            #   Identifies ambiguities, asks targeted questions
     requirement-agent.md          #   Analyze stories → scenarios + edge cases
     test-designer-agent.md        #   Scenarios → prioritized test cases
     automation-agent.md           #   Test cases → Playwright tests (POM)
@@ -175,8 +190,8 @@ The dashboard is a full-featured responsive web UI with 7 tabs:
 
 | Tab | What It Shows |
 |-----|---------------|
-| **Overview** | Clickable stat cards (Agent Logs, RCA Results, Bugs, Tests, Failures, Selector Fixes, Active Agents, Memory) + activity timeline |
-| **Agents** | All 6 `.md` agent cards with model, file, and MCP tools |
+| **Overview** | Clickable stat cards (Agent Logs, RCA Results, Bugs, Tests, Failures, Selector Fixes, Active Agents, Memory) — click any card to drill into the relevant tab with filters applied — plus activity timeline |
+| **Agents** | All 8 `.md` agent cards with model, file, and MCP tools |
 | **RCA** | Root cause analysis table with category badges, confidence bars, search, and category filter |
 | **Tests** | Test artifacts (requirements, designs, generated tests, failures) with type filter |
 | **Bugs** | Auto-filed ADO bugs with RCA details |
