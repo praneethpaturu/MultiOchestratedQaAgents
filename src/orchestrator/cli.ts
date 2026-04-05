@@ -1,11 +1,10 @@
 import { Command } from "commander";
-import readline from "readline";
-import { runPipeline, continuePipeline } from "./pipeline.js";
+import { runEngine } from "./engine.js";
+import { loadAllAgents } from "./agentLoader.js";
+import { initMCPServer, listTools } from "../mcp/server.js";
 import { clearMemory, queryMemory } from "../memory/store.js";
 import { logger } from "../utils/logger.js";
 import { config } from "../config/index.js";
-import { initializeAgents } from "./agentInit.js";
-import { getAgentManifest } from "../agents/registry.js";
 
 export function createCLI(): Command {
   const program = new Command();
@@ -13,29 +12,27 @@ export function createCLI(): Command {
   program
     .name("qa-agent")
     .description(
-      "Multi-Agent Orchestrated QA Platform — GitHub Copilot agent protocol"
+      "Multi-Agent Orchestrated QA Platform — .md Copilot Agents + MCP Tools"
     )
-    .version("2.0.0");
+    .version("3.0.0");
 
-  // ─── Main command: run pipeline via orchestrator ───
+  // ─── Run: Full orchestrated pipeline ───
   program
     .command("run")
-    .description("Run the full orchestrated QA pipeline for an ADO user story")
+    .description("Run the full MCP-orchestrated QA pipeline for an ADO user story")
     .requiredOption("-s, --story-id <id>", "Azure DevOps story ID", parseInt)
     .option("--dry-run", "Generate tests but do not execute them")
     .option("--skip-tests", "Generate and write test files but skip execution")
-    .option("-i, --interactive", "Enable interactive mode (pause for clarification)")
     .action(async (opts) => {
       validateConfig();
       try {
-        const ctx = await runPipeline({
+        const state = await runEngine({
           storyId: opts.storyId,
           dryRun: opts.dryRun,
           skipTests: opts.skipTests,
-          interactive: opts.interactive,
         });
 
-        if (ctx.reviewResult?.approved) {
+        if (state.reviewResult?.approved) {
           process.exit(0);
         } else {
           process.exit(1);
@@ -46,40 +43,70 @@ export function createCLI(): Command {
       }
     });
 
-  // ─── Serve: Start Copilot Extension server ───
+  // ─── Serve: Copilot Extension server ───
   program
     .command("serve")
     .description("Start the GitHub Copilot Extension server for VS Code")
     .option("-p, --port <port>", "Port number", "3000")
     .option("--skip-verify", "Skip GitHub signature verification (dev mode)")
     .action(async (opts) => {
-      if (opts.skipVerify) {
-        process.env.COPILOT_SKIP_VERIFY = "true";
-      }
+      if (opts.skipVerify) process.env.COPILOT_SKIP_VERIFY = "true";
       process.env.PORT = opts.port;
-      // Dynamic import to start the server
       await import("../copilot/server.js");
     });
 
-  // ─── Agents command: list registered agents ───
+  // ─── MCP: Start stdio MCP server ───
   program
-    .command("agents")
-    .description("List all registered Copilot agents and their skills")
-    .action(() => {
-      initializeAgents();
-      console.log("\nRegistered QA Agents:\n");
-      console.log(getAgentManifest());
-      console.log();
+    .command("mcp")
+    .description("Start the MCP server (stdio transport for VS Code)")
+    .action(async () => {
+      initMCPServer();
+      const { startStdioTransport } = await import("../mcp/server.js");
+      await startStdioTransport();
     });
 
-  // ─── Interactive session ───
+  // ─── Agents: List loaded agents ───
   program
-    .command("interactive")
-    .description("Start an interactive session with the orchestrator")
-    .requiredOption("-s, --story-id <id>", "Azure DevOps story ID", parseInt)
+    .command("agents")
+    .description("List all .md Copilot agent definitions and their MCP tools")
+    .action(() => {
+      const agents = loadAllAgents();
+      console.log(`\nLoaded ${agents.length} Copilot Agents:\n`);
+      for (const agent of agents) {
+        console.log(`  📋 ${agent.name} (${agent.slug}.md)`);
+        console.log(`     Model: ${agent.model}`);
+        console.log(`     Tools: ${agent.mcpTools.join(", ") || "(none)"}`);
+        console.log();
+      }
+    });
+
+  // ─── Tools: List MCP tools ───
+  program
+    .command("tools")
+    .description("List all registered MCP tools")
+    .action(() => {
+      initMCPServer();
+      const tools = listTools();
+      console.log(`\nMCP Tools (${tools.length}):\n`);
+      for (const tool of tools) {
+        console.log(`  🔧 ${tool.name}`);
+        console.log(`     ${tool.description.slice(0, 100)}`);
+        const params = Object.keys(tool.inputSchema.properties || {});
+        if (params.length > 0) {
+          console.log(`     Params: ${params.join(", ")}`);
+        }
+        console.log();
+      }
+    });
+
+  // ─── Dashboard ───
+  program
+    .command("dashboard")
+    .description("Start the QA dashboard web UI")
+    .option("-p, --port <port>", "Port number", "4000")
     .action(async (opts) => {
-      validateConfig();
-      await runInteractiveSession(opts.storyId);
+      process.env.DASHBOARD_PORT = opts.port;
+      await import("../dashboard/server.js");
     });
 
   // ─── Memory commands ───
@@ -118,71 +145,26 @@ export function createCLI(): Command {
       console.log("Memory cleared.");
     });
 
-  // ─── Config command ───
+  // ─── Config ───
   program
     .command("config")
-    .description("Show current configuration and model routing")
+    .description("Show current configuration")
     .action(() => {
-      console.log("\nQA Agent Platform Configuration:\n");
+      console.log("\nQA Agent Configuration:\n");
       console.log(`  ADO Org:     ${config.ado.org || "(not set)"}`);
       console.log(`  ADO Project: ${config.ado.project || "(not set)"}`);
       console.log(`  ADO Token:   ${config.ado.token ? "***" : "(not set)"}`);
       console.log();
-      console.log("  Model Routing (per agent):");
+      console.log("  Model Routing:");
       for (const [role, model] of Object.entries(config.models)) {
         console.log(`    ${role.padEnd(15)} → ${model}`);
       }
       console.log();
       console.log(`  Base URL:    ${config.playwright.baseUrl}`);
-      console.log(`  Headless:    ${config.playwright.headless}`);
       console.log(`  Log Level:   ${config.logging.level}`);
-      console.log();
-      console.log("  Pipeline Limits:");
-      console.log(`    Max maintenance retries: ${config.pipeline.maxMaintenanceRetries}`);
-      console.log(`    Max reviewer loops:      ${config.pipeline.maxReviewerLoops}`);
     });
 
   return program;
-}
-
-/**
- * Interactive session — orchestrator pauses for clarification
- * and the user answers questions in the terminal.
- */
-async function runInteractiveSession(storyId: number): Promise<void> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  const ask = (prompt: string): Promise<string> =>
-    new Promise((resolve) => rl.question(prompt, resolve));
-
-  console.log("\n╔══════════════════════════════════════════════╗");
-  console.log("║  QA Agent — Interactive Orchestration Mode   ║");
-  console.log("╚══════════════════════════════════════════════╝\n");
-  console.log(`Story ID: ${storyId}`);
-  console.log('Type "quit" at any prompt to exit.\n');
-
-  try {
-    // Run the pipeline in interactive mode
-    const ctx = await runPipeline({
-      storyId,
-      interactive: true,
-    });
-
-    // If the pipeline paused for clarification, handle Q&A loop
-    // (In the current implementation, this is handled by re-running with answers)
-
-    console.log("\n──── Pipeline Complete ────");
-    console.log(`  Review: ${ctx.reviewResult?.approved ? "APPROVED" : "REJECTED"}`);
-    console.log(`  Score:  ${ctx.reviewResult?.score ?? "N/A"}/100`);
-    console.log(`  Bugs:   ${ctx.bugs.length} filed`);
-  } catch (error) {
-    console.error(`\nPipeline error: ${(error as Error).message}`);
-  } finally {
-    rl.close();
-  }
 }
 
 function validateConfig(): void {
@@ -191,15 +173,13 @@ function validateConfig(): void {
   if (!config.ado.project) missing.push("ADO_PROJECT");
   if (!config.ado.token) missing.push("ADO_TOKEN");
 
-  const hasOpenAI = !!config.llm.openaiApiKey;
-  const hasAnthropic = !!config.llm.anthropicApiKey;
-  if (!hasOpenAI && !hasAnthropic) {
+  if (!config.llm.openaiApiKey && !config.llm.anthropicApiKey) {
     missing.push("OPENAI_API_KEY or ANTHROPIC_API_KEY");
   }
 
   if (missing.length > 0) {
     logger.error(
-      `Missing required configuration: ${missing.join(", ")}\nCopy .env.example to .env and fill in the values.`
+      `Missing: ${missing.join(", ")}\nCopy .env.example to .env and fill in values.`
     );
     process.exit(1);
   }
