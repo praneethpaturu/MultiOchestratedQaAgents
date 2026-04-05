@@ -46,6 +46,21 @@ export function createCLI(): Command {
       }
     });
 
+  // ─── Serve: Start Copilot Extension server ───
+  program
+    .command("serve")
+    .description("Start the GitHub Copilot Extension server for VS Code")
+    .option("-p, --port <port>", "Port number", "3000")
+    .option("--skip-verify", "Skip GitHub signature verification (dev mode)")
+    .action(async (opts) => {
+      if (opts.skipVerify) {
+        process.env.COPILOT_SKIP_VERIFY = "true";
+      }
+      process.env.PORT = opts.port;
+      // Dynamic import to start the server
+      await import("../copilot/server.js");
+    });
+
   // ─── Agents command: list registered agents ───
   program
     .command("agents")
