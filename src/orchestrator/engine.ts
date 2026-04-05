@@ -144,9 +144,22 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
       const rcaAgent = agentMap.get("rca-agent")!;
       const rcaStep = startStep(state, rcaAgent.slug, "Root cause analysis");
 
+      // Gather actual test code for RCA context
+      const testCodeSnippets = (currentFailures as any[])
+        .map((f: any) => {
+          try {
+            const fs = require("fs");
+            const path = require("path");
+            const p = path.resolve(process.cwd(), "playwright/tests/generated", f.fileName ?? "");
+            return fs.existsSync(p) ? fs.readFileSync(p, "utf-8") : "";
+          } catch { return ""; }
+        })
+        .filter(Boolean)
+        .join("\n\n");
+
       const rcaResult = await invokeAgent(rcaAgent, {
         failures: currentFailures,
-        testCode: "",
+        testCode: testCodeSnippets || "(test code not available)",
         maintenanceAttempts: state.maintenanceAttempts,
       });
       state.rcaResults = (rcaResult as any)?.results ?? [];
