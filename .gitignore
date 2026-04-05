@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+logs/
+reports/
+.qa-memory/
+playwright/tests/generated/*.spec.ts
+playwright/pages/*.ts
+!playwright/pages/BasePage.ts
+test-results/
+playwright-report/
+blob-report/

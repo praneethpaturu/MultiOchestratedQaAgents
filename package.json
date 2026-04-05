@@ -1,0 +1,38 @@
+{
+  "name": "qa-agents",
+  "version": "1.0.0",
+  "description": "Autonomous QA platform with multi-agent architecture, Playwright, and Azure DevOps integration",
+  "main": "dist/index.js",
+  "bin": {
+    "qa-agent": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "qa-agent": "tsx src/index.ts",
+    "test": "npx playwright test",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "axios": "^1.7.9",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "openai": "^4.82.0",
+    "ora": "^8.2.0",
+    "uuid": "^11.1.0",
+    "winston": "^3.17.0",
+    "@playwright/test": "^1.50.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
