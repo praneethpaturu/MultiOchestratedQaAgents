@@ -2,6 +2,7 @@ import { BaseAgent } from "./base.js";
 import { TestFailure, MaintenanceFix } from "./types.js";
 import { extractJSON } from "../utils/helpers.js";
 import { addMemory, findSelectorFixes } from "../memory/store.js";
+import { AgentCard, AgentRequest, AgentResponse } from "./protocol.js";
 
 const SYSTEM_PROMPT = `You are a Playwright maintenance and debugging specialist. You analyze test failures and produce targeted fixes.
 
@@ -43,13 +44,53 @@ export class MaintenanceAgent extends BaseAgent {
     super("MaintenanceAgent", "maintenance");
   }
 
+  getAgentCard(): AgentCard {
+    return {
+      slug: "maintenance",
+      name: "Maintenance Agent",
+      description: "Diagnoses and fixes broken Playwright tests — locators, waits, and broken flows",
+      instructions: "Analyzes test failures from Playwright execution, identifies root causes, and produces minimal targeted fixes. Records selector fixes in memory for self-healing.",
+      skills: [
+        {
+          name: "diagnose_and_fix",
+          description: "Analyze test failures and produce code fixes",
+          parameters: [
+            { name: "failures", type: "array", description: "Array of TestFailure objects", required: true },
+            { name: "testCode", type: "string", description: "Current test source code", required: true },
+          ],
+        },
+      ],
+      isOrchestrator: false,
+    };
+  }
+
+  async handle(request: AgentRequest): Promise<AgentResponse> {
+    const failures = request.arguments?.failures as TestFailure[]
+      ?? request.context.state.failures as TestFailure[];
+    const testCode = request.arguments?.testCode as string
+      ?? request.context.state.testCode as string;
+
+    if (!failures || !testCode) {
+      return this.error("failures and testCode are required");
+    }
+
+    try {
+      const fixes = await this.diagnoseAndFix(failures, testCode);
+      return this.success(
+        `Produced ${fixes.length} fix(es) for ${failures.length} failure(s)`,
+        fixes
+      );
+    } catch (err) {
+      return this.error(`Maintenance failed: ${(err as Error).message}`);
+    }
+  }
+
   async diagnoseAndFix(
     failures: TestFailure[],
     testCode: string
   ): Promise<MaintenanceFix[]> {
     this.log.info(`Diagnosing ${failures.length} test failure(s)`);
 
-    // Get historical fixes for context
     const pastFixes = findSelectorFixes("");
     const pastFixContext =
       pastFixes.length > 0
@@ -88,7 +129,6 @@ Respond with JSON only.`;
 
     const result = extractJSON<{ fixes: MaintenanceFix[] }>(response.content);
 
-    // Record selector fixes in memory for self-healing
     for (const fix of result.fixes) {
       if (
         fix.fixDescription.toLowerCase().includes("selector") ||
@@ -112,7 +152,6 @@ Respond with JSON only.`;
   }
 
   private extractSelector(code: string): string {
-    // Extract the most likely selector from a code snippet
     const patterns = [
       /getByTestId\(['"]([^'"]+)['"]\)/,
       /getByRole\(['"]([^'"]+)['"]/,

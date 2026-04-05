@@ -2,6 +2,7 @@ import { BaseAgent } from "./base.js";
 import { TestFailure, RCAResult, RCACategory } from "./types.js";
 import { extractJSON } from "../utils/helpers.js";
 import { addMemory, queryMemory } from "../memory/store.js";
+import { AgentCard, AgentRequest, AgentResponse } from "./protocol.js";
 
 const SYSTEM_PROMPT = `You are a deep Root Cause Analysis (RCA) specialist for automated UI testing. You analyze persistent test failures that could not be fixed by simple maintenance.
 
@@ -53,6 +54,46 @@ export class RCAAgent extends BaseAgent {
     super("RCAAgent", "rca");
   }
 
+  getAgentCard(): AgentCard {
+    return {
+      slug: "rca",
+      name: "Root Cause Analysis Agent",
+      description: "Deep analysis of persistent test failures — classifies into 7 categories and decides next action",
+      instructions: "Triggered when maintenance cannot fix failures. Analyzes error logs, DOM, network, and selectors to determine root cause. Decides whether to fix the test, file a bug, or flag infrastructure.",
+      skills: [
+        {
+          name: "analyze_failures",
+          description: "Perform deep root cause analysis on persistent test failures",
+          parameters: [
+            { name: "failures", type: "array", description: "Array of TestFailure objects", required: true },
+            { name: "testCode", type: "string", description: "Test source code", required: true },
+            { name: "maintenanceAttempts", type: "number", description: "Number of prior maintenance attempts", required: true },
+          ],
+        },
+      ],
+      isOrchestrator: false,
+    };
+  }
+
+  async handle(request: AgentRequest): Promise<AgentResponse> {
+    const failures = request.arguments?.failures as TestFailure[];
+    const testCode = request.arguments?.testCode as string;
+    const attempts = (request.arguments?.maintenanceAttempts as number) ?? 0;
+
+    if (!failures || !testCode) {
+      return this.error("failures and testCode are required");
+    }
+
+    try {
+      const results = await this.analyze(failures, testCode, attempts);
+      const productBugs = results.filter((r) => r.isProductBug);
+      const summary = `RCA complete: ${results.length} analyzed — ${productBugs.length} product bug(s), ${results.filter((r) => r.category === "TEST_BUG").length} test bug(s)`;
+      return this.success(summary, results);
+    } catch (err) {
+      return this.error(`RCA failed: ${(err as Error).message}`);
+    }
+  }
+
   async analyze(
     failures: TestFailure[],
     testCode: string,
@@ -62,7 +103,6 @@ export class RCAAgent extends BaseAgent {
       `Deep RCA analysis for ${failures.length} persistent failure(s) (after ${maintenanceAttempts} maintenance attempts)`
     );
 
-    // Get past RCA results for pattern detection
     const pastRCA = queryMemory({ type: "rca_result", limit: 10 });
     const patternContext =
       pastRCA.length > 0
@@ -104,7 +144,6 @@ Analyze thoroughly and respond with JSON only.`;
 
     const parsed = extractJSON<{ results: RCAResult[] }>(response.content);
 
-    // Enrich with error logs and store in memory
     const results: RCAResult[] = parsed.results.map((r, i) => {
       const enriched: RCAResult = {
         ...r,
@@ -132,9 +171,7 @@ Analyze thoroughly and respond with JSON only.`;
   private logSummary(results: RCAResult[]): void {
     const productBugs = results.filter((r) => r.isProductBug);
     const testBugs = results.filter((r) => r.category === "TEST_BUG");
-    const envIssues = results.filter(
-      (r) => r.category === "ENVIRONMENT_ISSUE"
-    );
+    const envIssues = results.filter((r) => r.category === "ENVIRONMENT_ISSUE");
 
     this.log.info(`RCA Summary:`);
     this.log.info(`  Product bugs: ${productBugs.length}`);
@@ -151,9 +188,6 @@ Analyze thoroughly and respond with JSON only.`;
     }
   }
 
-  /**
-   * Determine the action to take based on RCA category.
-   */
   static decideAction(
     result: RCAResult
   ): "fix_test" | "create_bug" | "retry" | "flag_infra" {

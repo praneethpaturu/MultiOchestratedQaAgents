@@ -22,6 +22,8 @@ export const config = {
   },
 
   models: {
+    orchestrator: env("MODEL_ORCHESTRATOR", "gpt-4o"),
+    clarifier: env("MODEL_CLARIFIER", "gpt-4o"),
     requirement: env("MODEL_REQUIREMENT", "gpt-4o"),
     testDesign: env("MODEL_TEST_DESIGN", "claude-sonnet-4-20250514"),
     automation: env("MODEL_AUTOMATION", "gpt-4o"),

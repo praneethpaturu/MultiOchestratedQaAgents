@@ -2,6 +2,7 @@ import { BaseAgent } from "./base.js";
 import { RequirementAnalysis, TestDesign } from "./types.js";
 import { extractJSON } from "../utils/helpers.js";
 import { getFlakyTests } from "../memory/store.js";
+import { AgentCard, AgentRequest, AgentResponse } from "./protocol.js";
 
 const SYSTEM_PROMPT = `You are an expert Test Designer. Given analyzed requirements, you produce structured, prioritized manual test cases that can be automated.
 
@@ -43,12 +44,49 @@ export class TestDesignerAgent extends BaseAgent {
     super("TestDesigner", "testDesign");
   }
 
+  getAgentCard(): AgentCard {
+    return {
+      slug: "test-designer",
+      name: "Test Designer",
+      description: "Converts analyzed requirements into prioritized, structured test cases",
+      instructions: "Given a requirement analysis, produces test cases with steps, priorities, tags, and risk levels. Considers flaky test history for risk-based prioritization.",
+      skills: [
+        {
+          name: "design_tests",
+          description: "Create prioritized test cases from a requirement analysis",
+          parameters: [
+            { name: "requirements", type: "object", description: "RequirementAnalysis object from the requirement-analyst agent", required: true },
+          ],
+        },
+      ],
+      isOrchestrator: false,
+    };
+  }
+
+  async handle(request: AgentRequest): Promise<AgentResponse> {
+    const requirements = request.arguments?.requirements as RequirementAnalysis
+      ?? request.context.state.requirements as RequirementAnalysis;
+
+    if (!requirements) {
+      return this.error("requirements data is required — run requirement-analyst first");
+    }
+
+    try {
+      const design = await this.design(requirements);
+      return this.success(
+        `Designed ${design.testCases.length} test cases (${design.testCases.filter((t) => t.automatable).length} automatable)`,
+        design
+      );
+    } catch (err) {
+      return this.error(`Test design failed: ${(err as Error).message}`);
+    }
+  }
+
   async design(requirements: RequirementAnalysis): Promise<TestDesign> {
     this.log.info(
       `Designing tests for story #${requirements.storyId} (${requirements.scenarios.length} scenarios)`
     );
 
-    // Pull flaky test history for risk awareness
     const flakyHistory = getFlakyTests(10);
     const flakyContext =
       flakyHistory.length > 0

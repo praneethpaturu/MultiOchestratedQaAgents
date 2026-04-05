@@ -1,6 +1,7 @@
 import { BaseAgent } from "./base.js";
 import { PipelineContext, ReviewResult } from "./types.js";
 import { extractJSON } from "../utils/helpers.js";
+import { AgentCard, AgentRequest, AgentResponse } from "./protocol.js";
 
 const SYSTEM_PROMPT = `You are a strict QA Governance Reviewer. You validate the entire output of the QA pipeline.
 
@@ -41,6 +42,45 @@ Be strict but fair. Quality gates matter.
 export class ReviewerAgent extends BaseAgent {
   constructor() {
     super("ReviewerAgent", "reviewer");
+  }
+
+  getAgentCard(): AgentCard {
+    return {
+      slug: "reviewer",
+      name: "Reviewer Agent",
+      description: "Strict governance gate — validates requirement coverage, code quality, flakiness risk, RCA accuracy, and bug quality",
+      instructions: "Evaluates the entire pipeline output across 8 criteria. Scores 0-100, rejects on blockers or score < 70. Returns detailed issues with fix suggestions.",
+      skills: [
+        {
+          name: "review_pipeline",
+          description: "Validate the full pipeline output and return approval/rejection with detailed feedback",
+          parameters: [
+            { name: "pipelineContext", type: "object", description: "Full PipelineContext object with all agent outputs", required: true },
+          ],
+        },
+      ],
+      isOrchestrator: false,
+    };
+  }
+
+  async handle(request: AgentRequest): Promise<AgentResponse> {
+    const context = request.arguments?.pipelineContext as PipelineContext
+      ?? request.context.state as unknown as PipelineContext;
+
+    if (!context?.storyId) {
+      return this.error("pipelineContext is required");
+    }
+
+    try {
+      const result = await this.review(context);
+      const status = result.approved ? "APPROVED" : "REJECTED";
+      return this.success(
+        `${status} (score: ${result.score}/100, ${result.issues.length} issues)`,
+        result
+      );
+    } catch (err) {
+      return this.error(`Review failed: ${(err as Error).message}`);
+    }
   }
 
   async review(context: PipelineContext): Promise<ReviewResult> {

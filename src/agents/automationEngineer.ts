@@ -2,6 +2,7 @@ import { BaseAgent } from "./base.js";
 import { TestDesign, AutomationResult, GeneratedTest } from "./types.js";
 import { extractJSON } from "../utils/helpers.js";
 import { findSelectorFixes } from "../memory/store.js";
+import { AgentCard, AgentRequest, AgentResponse } from "./protocol.js";
 
 const SYSTEM_PROMPT = `You are an expert Playwright automation engineer. You convert test cases into production-quality Playwright TypeScript tests.
 
@@ -78,13 +79,78 @@ export class AutomationEngineerAgent extends BaseAgent {
     super("AutomationEngineer", "automation");
   }
 
+  getAgentCard(): AgentCard {
+    return {
+      slug: "automation-engineer",
+      name: "Automation Engineer",
+      description: "Converts test cases into production Playwright TypeScript tests with POM",
+      instructions: "Generates Playwright test specs and Page Object files from structured test cases. Uses stable selectors, proper waits, and fixtures.",
+      skills: [
+        {
+          name: "generate_tests",
+          description: "Convert test cases into Playwright TypeScript test files with Page Objects",
+          parameters: [
+            { name: "testDesign", type: "object", description: "TestDesign object from the test-designer agent", required: true },
+          ],
+        },
+        {
+          name: "apply_fix",
+          description: "Apply a targeted fix to a specific test file based on error feedback",
+          parameters: [
+            { name: "test", type: "object", description: "The GeneratedTest object to fix", required: true },
+            { name: "fixDescription", type: "string", description: "What needs to be fixed", required: true },
+            { name: "errorLog", type: "string", description: "Error log from the failed test", required: true },
+          ],
+        },
+      ],
+      isOrchestrator: false,
+    };
+  }
+
+  async handle(request: AgentRequest): Promise<AgentResponse> {
+    const skill = request.skillName ?? "generate_tests";
+
+    if (skill === "generate_tests") {
+      const testDesign = request.arguments?.testDesign as TestDesign
+        ?? request.context.state.testDesign as TestDesign;
+      if (!testDesign) {
+        return this.error("testDesign is required — run test-designer first");
+      }
+      try {
+        const result = await this.generate(testDesign);
+        return this.success(
+          `Generated ${result.tests.length} test files with ${result.tests.reduce((s, t) => s + t.pageObjects.length, 0)} page objects`,
+          result
+        );
+      } catch (err) {
+        return this.error(`Test generation failed: ${(err as Error).message}`);
+      }
+    }
+
+    if (skill === "apply_fix") {
+      const test = request.arguments?.test as GeneratedTest;
+      const fixDesc = request.arguments?.fixDescription as string;
+      const errorLog = request.arguments?.errorLog as string;
+      if (!test || !fixDesc) {
+        return this.error("test and fixDescription are required for apply_fix");
+      }
+      try {
+        const fixed = await this.applyFix(test, fixDesc, errorLog ?? "");
+        return this.success(`Fixed ${fixed.fileName}`, fixed);
+      } catch (err) {
+        return this.error(`Fix failed: ${(err as Error).message}`);
+      }
+    }
+
+    return this.error(`Unknown skill: ${skill}`);
+  }
+
   async generate(testDesign: TestDesign): Promise<AutomationResult> {
     const automatableTests = testDesign.testCases.filter((tc) => tc.automatable);
     this.log.info(
       `Generating Playwright tests for ${automatableTests.length} test cases`
     );
 
-    // Gather historical selector fixes for self-healing hints
     const selectorHistory = findSelectorFixes("");
     const healingHints =
       selectorHistory.length > 0
@@ -119,9 +185,6 @@ Respond with the JSON object only.`;
     return result;
   }
 
-  /**
-   * Apply a maintenance fix by re-generating only the affected test.
-   */
   async applyFix(
     originalTest: GeneratedTest,
     fixDescription: string,
