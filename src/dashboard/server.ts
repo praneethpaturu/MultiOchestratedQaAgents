@@ -563,7 +563,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   <div class="tab active" data-tab="overview">Overview</div>
   <div class="tab" data-tab="agents">Agents</div>
   <div class="tab" data-tab="rca">RCA <span class="tab-count" id="rcaCount">0</span></div>
-  <div class="tab" data-tab="tests">Tests</div>
+  <div class="tab" data-tab="manual">Manual Cases <span class="tab-count" id="manualCount">0</span></div>
+  <div class="tab" data-tab="automation">Automation Code <span class="tab-count" id="automationCount">0</span></div>
+  <div class="tab" data-tab="tests">Test Runs</div>
   <div class="tab" data-tab="bugs">Bugs <span class="tab-count" id="bugCount">0</span></div>
   <div class="tab" data-tab="memory">Memory</div>
   <div class="tab" data-tab="logs">Logs <span class="tab-count" id="logCount">0</span></div>
@@ -603,10 +605,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   </tr></thead><tbody id="rcaBody"></tbody></table></div>
 </div>
 
-<!-- TESTS TAB -->
+<!-- MANUAL CASES TAB -->
+<div class="panel" id="panel-manual">
+  <div class="search-bar"><input class="search-input" id="manualSearch" placeholder="Search manual test cases..." oninput="renderManual()"></div>
+  <div id="manualBody" style="display:flex;flex-direction:column;gap:14px"></div>
+</div>
+
+<!-- AUTOMATION CODE TAB -->
+<div class="panel" id="panel-automation">
+  <div class="search-bar"><input class="search-input" id="autoSearch" placeholder="Search Playwright code..." oninput="renderAutomation()"></div>
+  <div id="autoBody" style="display:flex;flex-direction:column;gap:14px"></div>
+</div>
+
+<!-- TEST RUNS TAB -->
 <div class="panel" id="panel-tests">
   <div class="search-bar">
-    <input class="search-input" id="testSearch" placeholder="Search tests..." oninput="renderTests()">
+    <input class="search-input" id="testSearch" placeholder="Search test runs..." oninput="renderTests()">
     <select class="filter-select" id="testTypeFilter" onchange="renderTests()">
       <option value="">All Types</option>
       <option value="requirement_analysis">Requirements</option>
@@ -741,6 +755,8 @@ function renderAll() {
   renderOverview();
   renderAgents();
   renderRCA();
+  renderManual();
+  renderAutomation();
   renderTests();
   renderBugs();
   renderMemory();
@@ -750,6 +766,10 @@ function renderAll() {
   document.getElementById('rcaCount').textContent = data.rca.length;
   document.getElementById('bugCount').textContent = data.bugs.length;
   document.getElementById('logCount').textContent = data.logs.length;
+  const manualEntries = data.tests.filter(t => t.type === 'test_design');
+  const autoEntries = data.tests.filter(t => t.type === 'generated_tests');
+  const mc = document.getElementById('manualCount'); if (mc) mc.textContent = manualEntries.length;
+  const ac = document.getElementById('automationCount'); if (ac) ac.textContent = autoEntries.length;
 }
 
 // ─── Navigate to tab ───
@@ -854,6 +874,93 @@ function renderRCA() {
 }
 
 // ─── Tests ───
+function renderManual() {
+  const search = (document.getElementById('manualSearch')?.value||'').toLowerCase();
+  const entries = (data.tests || []).filter(t => t.type === 'test_design');
+  const body = document.getElementById('manualBody');
+  if (!body) return;
+  if (entries.length === 0) { body.innerHTML = '<div class="empty">No manual test cases yet — run the pipeline to populate.</div>'; return; }
+  let html = '';
+  entries.forEach((entry, idx) => {
+    const d = entry.data || {};
+    const cases = d.testCases || d.cases || [];
+    const storyId = d.storyId ?? entry.key?.split(':')[1] ?? '?';
+    html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      + '<div><span style="color:var(--accent);font-weight:600">Story #'+storyId+'</span> <span style="color:var(--muted);font-size:12px;margin-left:8px">'+fmtTime(entry.timestamp)+'</span></div>'
+      + '<span class="badge badge-count">'+(cases.length || d.testCaseCount || 0)+' test cases</span>'
+      + '</div>';
+    if (cases.length === 0) {
+      html += '<div class="empty">'+esc(JSON.stringify(d, null, 2).slice(0, 500))+'</div>';
+    } else {
+      const filtered = search ? cases.filter(c => JSON.stringify(c).toLowerCase().includes(search)) : cases;
+      filtered.forEach((c, ci) => {
+        const tcId = 'mt-'+idx+'-'+ci;
+        const priorityColor = c.priority === 'critical' || c.priority === 'P0' ? 'var(--red)' : c.priority === 'high' || c.priority === 'P1' ? 'var(--orange)' : 'var(--green)';
+        html += '<div style="border-top:1px solid var(--border);padding:10px 0">'
+          + '<div onclick="toggleDetail(\\''+tcId+'\\')" style="cursor:pointer;display:flex;align-items:center;gap:8px">'
+          + '<span class="expand-btn">▶</span>'
+          + '<span style="font-weight:600">'+esc(c.id || c.name || 'TC-'+ci)+'</span>'
+          + (c.priority ? '<span style="background:'+priorityColor+';color:#000;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600">'+esc(c.priority)+'</span>' : '')
+          + (c.automatable === false ? '<span style="color:var(--orange);font-size:11px">manual-only</span>' : '<span style="color:var(--green);font-size:11px">automatable</span>')
+          + '<span style="color:var(--text);margin-left:6px">'+esc(c.title || c.name || '')+'</span>'
+          + '</div>'
+          + '<div class="detail-row" id="'+tcId+'" style="display:none;padding-left:24px;padding-top:8px">';
+        if (c.preconditions?.length) html += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px"><b>Preconditions:</b><ul style="margin-left:16px">'+c.preconditions.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul></div>';
+        if (c.steps?.length) html += '<div style="font-size:12px;color:var(--text);margin-bottom:6px"><b>Steps:</b><ol style="margin-left:16px">'+c.steps.map(s=>'<li>'+esc(typeof s==='string'?s:(s.action||s.step||JSON.stringify(s)))+(s.expected?' → <i style="color:var(--muted)">'+esc(s.expected)+'</i>':'')+'</li>').join('')+'</ol></div>';
+        if (c.expectedResult) html += '<div style="font-size:12px;color:var(--green);margin-bottom:6px"><b>Expected:</b> '+esc(c.expectedResult)+'</div>';
+        if (c.tags?.length) html += '<div style="font-size:11px;color:var(--muted)">tags: '+c.tags.map(t=>esc(t)).join(', ')+'</div>';
+        html += '</div></div>';
+      });
+    }
+    html += '</div>';
+  });
+  body.innerHTML = html;
+}
+
+function renderAutomation() {
+  const search = (document.getElementById('autoSearch')?.value||'').toLowerCase();
+  const entries = (data.tests || []).filter(t => t.type === 'generated_tests');
+  const body = document.getElementById('autoBody');
+  if (!body) return;
+  if (entries.length === 0) { body.innerHTML = '<div class="empty">No automation code generated yet.</div>'; return; }
+  let html = '';
+  entries.forEach((entry, idx) => {
+    const d = entry.data || {};
+    const tests = d.tests || [];
+    const storyId = d.storyId ?? entry.key?.split(':')[1] ?? '?';
+    html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      + '<div><span style="color:var(--accent);font-weight:600">Story #'+storyId+'</span> <span style="color:var(--muted);font-size:12px;margin-left:8px">'+fmtTime(entry.timestamp)+'</span></div>'
+      + '<span class="badge badge-count">'+tests.length+' .spec files</span>'
+      + '</div>';
+    const filtered = search ? tests.filter(t => JSON.stringify(t).toLowerCase().includes(search)) : tests;
+    filtered.forEach((t, ti) => {
+      const tcId = 'at-'+idx+'-'+ti;
+      html += '<div style="border-top:1px solid var(--border);padding:10px 0">'
+        + '<div onclick="toggleDetail(\\''+tcId+'\\')" style="cursor:pointer;display:flex;align-items:center;gap:8px">'
+        + '<span class="expand-btn">▶</span>'
+        + '<span style="font-family:monospace;color:var(--accent);font-weight:600">'+esc(t.fileName||'unknown.spec.ts')+'</span>'
+        + '<span style="color:var(--muted);font-size:11px">'+esc(t.testCaseId||'')+'</span>'
+        + '<span style="color:var(--muted);font-size:11px;margin-left:auto">'+(t.code?t.code.split('\\n').length:0)+' lines</span>'
+        + '</div>'
+        + '<div class="detail-row" id="'+tcId+'" style="display:none;padding-top:8px">'
+        + '<pre style="background:#0d1117;border:1px solid var(--border);border-radius:var(--radius);padding:12px;overflow-x:auto;font-size:12px;color:#c9d1d9;line-height:1.5"><code>'+esc(t.code||'')+'</code></pre>';
+      if (t.pageObjects?.length) {
+        html += '<div style="margin-top:10px"><b style="font-size:12px;color:var(--muted)">Page Objects:</b></div>';
+        t.pageObjects.forEach((po, pi) => {
+          const poId = tcId+'-po-'+pi;
+          html += '<div style="margin-top:6px"><div onclick="toggleDetail(\\''+poId+'\\')" style="cursor:pointer;font-family:monospace;color:var(--purple);font-size:13px"><span class="expand-btn">▶</span> '+esc(po.fileName||'')+'</div>'
+            + '<div class="detail-row" id="'+poId+'" style="display:none"><pre style="background:#0d1117;border:1px solid var(--border);border-radius:var(--radius);padding:12px;overflow-x:auto;font-size:12px;color:#c9d1d9;line-height:1.5"><code>'+esc(po.code||'')+'</code></pre></div></div>';
+        });
+      }
+      html += '</div></div>';
+    });
+    html += '</div>';
+  });
+  body.innerHTML = html;
+}
+
 function renderTests() {
   const search = (document.getElementById('testSearch')?.value||'').toLowerCase();
   const type = document.getElementById('testTypeFilter')?.value||'';
