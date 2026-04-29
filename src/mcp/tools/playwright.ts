@@ -108,16 +108,17 @@ export const playwrightToolHandlers: Record<string, MCPToolHandler> = {
     const project = args.project as string;
     const grep = args.grep as string;
 
-    let cmd = "npx playwright test --reporter=json,list";
-    if (project) cmd += ` --project=${project}`;
-    if (grep) cmd += ` --grep="${grep}"`;
+    // Build args array to avoid shell injection
+    const cmdArgs = ["playwright", "test", "--reporter=json,list"];
+    if (project) cmdArgs.push(`--project=${project.replace(/[^a-zA-Z0-9_-]/g, "")}`);
+    if (grep) cmdArgs.push(`--grep=${grep.replace(/[^a-zA-Z0-9_ .*?+[\]()-]/g, "")}`);
 
     for (const dir of [REPORTS_DIR]) {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     }
 
     try {
-      execSync(cmd, {
+      execSync(`npx ${cmdArgs.join(" ")}`, {
         cwd: PW_DIR,
         stdio: "pipe",
         timeout: 300_000,

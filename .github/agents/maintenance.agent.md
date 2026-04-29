@@ -2,23 +2,15 @@
 name: QA Maintenance
 description: Diagnoses and fixes broken Playwright tests — learns from every fix to build self-healing knowledge
 tools:
-  - 'edit'
+  - 'editFiles'
   - 'search/codebase'
   - 'search/usages'
-  - 'read/terminalLastCommand'
   - 'qa-agent-mcp/getFailures'
   - 'qa-agent-mcp/retrieveMemory'
   - 'qa-agent-mcp/saveMemory'
   - 'qa-agent-mcp/findSimilarFailures'
   - 'qa-agent-mcp/logEvent'
-model:
-  - 'GPT-4o'
-  - 'Claude Sonnet 4'
-handoffs:
-  - label: Run RCA
-    agent: rca
-    prompt: 'These failures persist after maintenance attempts. Perform deep root cause analysis.'
-    send: false
+model: GPT-4o
 ---
 
 # QA Maintenance & Fix Agent

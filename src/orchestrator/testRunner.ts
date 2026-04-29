@@ -35,18 +35,32 @@ export function writeTestFiles(tests: GeneratedTest[], fixtureCode?: string): vo
   }
 
   for (const test of tests) {
-    // Write test spec
     const testPath = path.join(GENERATED_DIR, test.fileName);
-    fs.writeFileSync(testPath, test.code);
+    fs.writeFileSync(testPath, normalizeTestCode(test.code));
     log.info(`Written test: ${test.fileName}`);
 
-    // Write page objects
     for (const po of test.pageObjects) {
       const poPath = path.join(PAGES_DIR, po.fileName);
-      fs.writeFileSync(poPath, po.code);
+      fs.writeFileSync(poPath, normalizePageObjectCode(po.code));
       log.info(`Written page object: ${po.fileName}`);
     }
   }
+}
+
+function normalizeTestCode(code: string): string {
+  return code.replace(/from\s+['"](\.\.\/)+pages\//g, "from '../../pages/");
+}
+
+function normalizePageObjectCode(code: string): string {
+  const usesExpect = /\bexpect\s*\(/.test(code);
+  const importsExpect = /import\s*\{[^}]*\bexpect\b[^}]*\}\s*from\s*['"]@playwright\/test['"]/.test(code);
+  if (usesExpect && !importsExpect) {
+    return code.replace(
+      /import\s*\{([^}]+)\}\s*from\s*(['"])@playwright\/test\2/,
+      (_m, names, quote) => `import { ${names.trim()}, expect } from ${quote}@playwright/test${quote}`
+    );
+  }
+  return code;
 }
 
 /**

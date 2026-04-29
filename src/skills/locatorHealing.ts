@@ -55,7 +55,7 @@ function suggestUpgrade(selector: string): SelectorCandidate | null {
   if (
     selector.match(/\.[a-zA-Z]+__[a-zA-Z]+/) || // BEM-like
     selector.match(/#[a-z]+-\d+/) ||              // generated IDs
-    selector.match(/\nth-child\(\d+\)/)           // positional
+    selector.match(/nth-child\(\d+\)/)            // positional
   ) {
     return {
       selector: `[data-testid="TODO-add-testid"]`,

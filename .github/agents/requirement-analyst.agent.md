@@ -8,14 +8,7 @@ tools:
   - 'qa-agent-mcp/retrieveMemory'
   - 'qa-agent-mcp/saveMemory'
   - 'qa-agent-mcp/logEvent'
-model:
-  - 'GPT-4o'
-  - 'Claude Sonnet 4'
-handoffs:
-  - label: Design Test Cases
-    agent: test-designer
-    prompt: 'Create prioritized test cases from the requirements analysis above.'
-    send: false
+model: GPT-4o
 ---
 
 # QA Requirement Analyst Agent

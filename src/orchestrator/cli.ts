@@ -1,10 +1,4 @@
 import { Command } from "commander";
-import { runEngine } from "./engine.js";
-import { loadAllAgents } from "./agentLoader.js";
-import { initMCPServer, listTools, executeTool } from "../mcp/server.js";
-import { clearMemory } from "../memory/store.js";
-import { logger } from "../utils/logger.js";
-import { config } from "../config/index.js";
 
 export function createCLI(): Command {
   const program = new Command();
@@ -24,7 +18,10 @@ export function createCLI(): Command {
     .option("--dry-run", "Generate tests but do not execute them")
     .option("--skip-tests", "Generate and write test files but skip execution")
     .action(async (opts) => {
-      validateConfig();
+      const { config } = await import("../config/index.js");
+      const { logger } = await import("../utils/logger.js");
+      const { runEngine } = await import("./engine.js");
+      validateConfig(config, logger);
       try {
         const state = await runEngine({
           storyId: opts.storyId,
@@ -60,8 +57,8 @@ export function createCLI(): Command {
     .command("mcp")
     .description("Start the MCP server (stdio transport for VS Code)")
     .action(async () => {
+      const { initMCPServer, startStdioTransport } = await import("../mcp/server.js");
       initMCPServer();
-      const { startStdioTransport } = await import("../mcp/server.js");
       await startStdioTransport();
     });
 
@@ -69,7 +66,8 @@ export function createCLI(): Command {
   program
     .command("agents")
     .description("List all .md Copilot agent definitions and their MCP tools")
-    .action(() => {
+    .action(async () => {
+      const { loadAllAgents } = await import("./agentLoader.js");
       const agents = loadAllAgents();
       console.log(`\nLoaded ${agents.length} Copilot Agents:\n`);
       for (const agent of agents) {
@@ -84,7 +82,8 @@ export function createCLI(): Command {
   program
     .command("tools")
     .description("List all registered MCP tools")
-    .action(() => {
+    .action(async () => {
+      const { initMCPServer, listTools } = await import("../mcp/server.js");
       initMCPServer();
       const tools = listTools();
       console.log(`\nMCP Tools (${tools.length}):\n`);
@@ -120,6 +119,7 @@ export function createCLI(): Command {
     .option("-t, --type <type>", "Filter by type")
     .option("-n, --limit <n>", "Limit results", parseInt)
     .action(async (opts) => {
+      const { initMCPServer, executeTool } = await import("../mcp/server.js");
       initMCPServer();
       const result = await executeTool("retrieveMemory", {
         type: opts.type,
@@ -142,7 +142,8 @@ export function createCLI(): Command {
   memory
     .command("clear")
     .description("Clear all memory")
-    .action(() => {
+    .action(async () => {
+      const { clearMemory } = await import("../memory/store.js");
       clearMemory();
       console.log("Memory cleared.");
     });
@@ -151,7 +152,8 @@ export function createCLI(): Command {
   program
     .command("config")
     .description("Show current configuration")
-    .action(() => {
+    .action(async () => {
+      const { config } = await import("../config/index.js");
       console.log("\nQA Agent Configuration:\n");
       console.log(`  ADO Org:     ${config.ado.org || "(not set)"}`);
       console.log(`  ADO Project: ${config.ado.project || "(not set)"}`);
@@ -169,7 +171,7 @@ export function createCLI(): Command {
   return program;
 }
 
-function validateConfig(): void {
+function validateConfig(config: any, logger: any): void {
   const missing: string[] = [];
   if (!config.ado.org) missing.push("ADO_ORG");
   if (!config.ado.project) missing.push("ADO_PROJECT");

@@ -27,6 +27,8 @@ export const logger = winston.createLogger({
       filename: path.join(logDir, "combined.log"),
     }),
     new winston.transports.Console({
+      // Use stderr to avoid polluting stdout when running as MCP stdio server
+      stderrLevels: ["error", "warn", "info", "http", "verbose", "debug", "silly"],
       format: winston.format.combine(
         timestamp,
         winston.format.printf(({ level, message, timestamp: ts, agent }) => {

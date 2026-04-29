@@ -4,7 +4,6 @@ description: Deep root cause analysis with 7 failure categories — learns from 
 tools:
   - 'search/codebase'
   - 'search/usages'
-  - 'read/terminalLastCommand'
   - 'web/fetch'
   - 'qa-agent-mcp/analyzeLogs'
   - 'qa-agent-mcp/calculateConfidence'
@@ -14,18 +13,7 @@ tools:
   - 'qa-agent-mcp/logEvent'
   - 'qa-agent-mcp/createBug'
   - 'qa-agent-mcp/searchBugs'
-model:
-  - 'Claude Opus 4'
-  - 'GPT-4o'
-handoffs:
-  - label: Fix Test Issues
-    agent: automation-engineer
-    prompt: 'Fix the test issues identified in the RCA above.'
-    send: false
-  - label: Fix Maintenance Issues
-    agent: maintenance
-    prompt: 'Apply the suggested fixes from the RCA analysis above.'
-    send: false
+model: GPT-4o
 ---
 
 # Root Cause Analysis (RCA) Agent

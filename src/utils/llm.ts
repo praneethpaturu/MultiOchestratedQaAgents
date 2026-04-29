@@ -46,7 +46,7 @@ async function callOpenAI(params: LLMCallParams): Promise<LLMResponse> {
       { role: "user", content: params.userPrompt },
     ],
     temperature: params.temperature,
-    max_tokens: params.maxTokens,
+    max_completion_tokens: params.maxTokens,
   });
 
   const choice = response.choices[0];
@@ -133,7 +133,7 @@ async function callOpenAIWithTools(
       { role: "user", content: params.userPrompt },
     ],
     temperature: params.temperature,
-    max_tokens: params.maxTokens,
+    max_completion_tokens: params.maxTokens,
     tools,
     tool_choice: "auto",
   });

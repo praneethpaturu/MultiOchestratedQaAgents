@@ -44,7 +44,7 @@ export function analyzeFlakiness(testCode: string, testName: string): FlakinessR
   }
 
   // Check for fixed test data (dates, IDs)
-  if (testCode.match(/202[4-9]-\d{2}-\d{2}/)) {
+  if (testCode.match(/20\d{2}-\d{2}-\d{2}/)) {
     riskScore += 0.1;
     reasons.push("Hardcoded date found — may become stale");
   }

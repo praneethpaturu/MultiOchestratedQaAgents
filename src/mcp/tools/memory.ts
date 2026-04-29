@@ -21,6 +21,12 @@ const MEMORY_FILES: Record<string, string> = {
   requirement_analysis: "testResults.json",
   failure: "testResults.json",
   bug_filed: "testResults.json",
+  clarification: "testResults.json",
+  clarification_patterns: "testResults.json",
+  pipeline_history: "testResults.json",
+  missed_scenarios: "rcaMemory.json",
+  reviewer_feedback: "rcaMemory.json",
+  maintenance_fix: "rcaMemory.json",
   log: "logs.json",
 };
 
@@ -62,7 +68,7 @@ export const memoryToolDefinitions: MCPToolDefinition[] = [
       type: "object",
       properties: {
         key: { type: "string", description: "Unique memory key (e.g., 'requirements:12345')" },
-        type: { type: "string", description: "Memory type: rca_result, selector_fix, flaky_test, test_design, generated_tests, requirement_analysis, failure, bug_filed" },
+        type: { type: "string", description: "Memory type: rca_result, selector_fix, flaky_test, test_design, generated_tests, requirement_analysis, failure, bug_filed, clarification, clarification_patterns, pipeline_history, missed_scenarios, reviewer_feedback, maintenance_fix" },
         data: { type: "object", description: "The data to store" },
       },
       required: ["key", "type", "data"],

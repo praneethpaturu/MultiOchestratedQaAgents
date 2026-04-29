@@ -2,11 +2,8 @@
   "servers": {
     "qa-agent-mcp": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["tsx", "src/index.ts", "mcp"],
-      "env": {
-        "NODE_ENV": "development"
-      }
+      "command": "node",
+      "args": ["mcp-test.js"]
     }
   }
 }

@@ -7,18 +7,7 @@ tools:
   - 'qa-agent-mcp/retrieveMemory'
   - 'qa-agent-mcp/saveMemory'
   - 'qa-agent-mcp/logEvent'
-model:
-  - 'Claude Opus 4'
-  - 'GPT-4o'
-handoffs:
-  - label: Fix Issues
-    agent: automation-engineer
-    prompt: 'Fix the issues identified in the review above.'
-    send: false
-  - label: Re-run Pipeline
-    agent: orchestrator
-    prompt: 'Re-run the QA pipeline with the reviewer feedback applied.'
-    send: false
+model: GPT-4o
 ---
 
 # QA Reviewer (Governance Gate) Agent

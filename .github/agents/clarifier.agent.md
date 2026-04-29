@@ -8,14 +8,7 @@ tools:
   - 'qa-agent-mcp/retrieveMemory'
   - 'qa-agent-mcp/saveMemory'
   - 'qa-agent-mcp/logEvent'
-model:
-  - 'GPT-4o'
-  - 'Claude Sonnet 4'
-handoffs:
-  - label: Analyze Requirements
-    agent: requirement-analyst
-    prompt: 'Extract requirements and scenarios from this story using the clarification context above.'
-    send: false
+model: GPT-4o
 ---
 
 # QA Clarifier Agent

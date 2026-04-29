@@ -218,6 +218,6 @@ Only change what's needed to fix the issue. Respond with JSON only.`;
     });
 
     const result = extractJSON<{ tests: GeneratedTest[] }>(response.content);
-    return result.tests[0] ?? originalTest;
+    return result.tests?.[0] ?? originalTest;
   }
 }

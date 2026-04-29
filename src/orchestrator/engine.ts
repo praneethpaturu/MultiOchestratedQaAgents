@@ -9,6 +9,8 @@
  *   4. Managing state, loops, and decisions
  */
 
+import fs from "fs";
+import path from "path";
 import { agentLogger } from "../utils/logger.js";
 import { config } from "../config/index.js";
 import { routeToModel } from "../utils/router.js";
@@ -97,6 +99,13 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
     state.automation = autoResult;
     completeStep(state, autoStep, autoResult);
 
+    const generatedTests = (autoResult as any)?.tests;
+    if (Array.isArray(generatedTests) && generatedTests.length > 0) {
+      const { writeTestFiles } = await import("./testRunner.js");
+      writeTestFiles(generatedTests);
+      log.info(`Persisted ${generatedTests.length} test file(s) to disk`);
+    }
+
     if (dryRun || skipTests) {
       log.info(`${dryRun ? "DRY RUN" : "SKIP TESTS"}: Execution skipped`);
       finishPipeline(state);
@@ -108,6 +117,7 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
     const runResult = await executeTool("runTests", {});
     state.testResults = runResult.result as any;
     completeStep(state, runStep, runResult.result);
+    await persistFailures(storyId, (runResult.result as any)?.failures ?? []);
 
     // ── STEP 5: Maintenance Loop ──
     const failures = (state.testResults as any)?.failures ?? [];
@@ -132,6 +142,7 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
       const rerunResult = await executeTool("runTests", {});
       currentFailures = (rerunResult.result as any)?.failures ?? [];
       state.testResults = rerunResult.result as any;
+      await persistFailures(storyId, currentFailures);
 
       if (currentFailures.length === 0) {
         log.info(`Tests passed after maintenance attempt #${state.maintenanceAttempts}`);
@@ -148,10 +159,8 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
       const testCodeSnippets = (currentFailures as any[])
         .map((f: any) => {
           try {
-            const fs = require("fs");
-            const path = require("path");
-            const p = path.resolve(process.cwd(), "playwright/tests/generated", f.fileName ?? "");
-            return fs.existsSync(p) ? fs.readFileSync(p, "utf-8") : "";
+            const filePath = path.resolve(process.cwd(), "playwright/tests/generated", f.fileName ?? "");
+            return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
           } catch { return ""; }
         })
         .filter(Boolean)
@@ -164,6 +173,7 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
       });
       state.rcaResults = (rcaResult as any)?.results ?? [];
       completeStep(state, rcaStep, rcaResult);
+      await persistRcaResults(storyId, state.rcaResults as any[]);
 
       // Handle RCA actions
       for (const result of state.rcaResults as any[]) {
@@ -177,8 +187,22 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
             tags: "auto-qa-agent;rca-generated",
           });
           if (bugResult.success) {
-            state.bugs.push(bugResult.result as any);
-            log.info(`Bug created: #${(bugResult.result as any).id}`);
+            const bug = bugResult.result as any;
+            state.bugs.push(bug);
+            log.info(`Bug created: #${bug.id}`);
+            await executeTool("saveMemory", {
+              key: `bug:${bug.id}`,
+              type: "bug_filed",
+              data: {
+                bugId: bug.id,
+                storyId,
+                category: result.category,
+                rootCause: result.rootCause,
+                title: `[Auto-QA] ${result.category}: ${(result.rootCause ?? "").slice(0, 100)}`,
+                confidence: result.confidence,
+                testName: result.testName,
+              },
+            });
           }
         }
       }
@@ -229,6 +253,12 @@ async function invokeAgent(
 ): Promise<unknown> {
   log.info(`Invoking agent: ${agent.name}`);
 
+  await executeTool("logEvent", {
+    agent: agent.slug,
+    event: "started",
+    data: { storyId: context.storyId, contextKeys: Object.keys(context) },
+  });
+
   // Build system prompt from the .md definition
   const systemPrompt = `${agent.rawMarkdown}
 
@@ -240,7 +270,7 @@ IMPORTANT: You have access to MCP tools. When you need to use a tool, include a 
 
   // Execute MCP tools the agent references
   for (const toolName of agent.mcpTools) {
-    const toolArgs = buildToolArgs(toolName, context);
+    const toolArgs = buildToolArgs(toolName, context, agent.slug);
     if (toolArgs) {
       const result = await executeTool(toolName, toolArgs);
       if (result.success) {
@@ -256,11 +286,70 @@ IMPORTANT: You have access to MCP tools. When you need to use a tool, include a 
     maxTokens: 6000,
   });
 
+  let parsed: unknown;
   try {
-    return extractJSON(response.content);
+    parsed = extractJSON(response.content);
   } catch {
-    return { rawResponse: response.content };
+    parsed = { rawResponse: response.content };
   }
+
+  await persistAgentResult(agent.slug, context.storyId, parsed);
+
+  await executeTool("logEvent", {
+    agent: agent.slug,
+    event: "completed",
+    data: { storyId: context.storyId, outputKeys: Object.keys((parsed as Record<string, unknown>) ?? {}) },
+  });
+
+  return parsed;
+}
+
+async function persistFailures(storyId: number, failures: any[]): Promise<void> {
+  for (const f of failures || []) {
+    await executeTool("saveMemory", {
+      key: `failure:${storyId}:${(f.testName ?? "unknown").slice(0, 80)}:${Date.now()}`,
+      type: "failure",
+      data: {
+        storyId,
+        testName: f.testName,
+        fileName: f.fileName,
+        error: (f.errorMessage ?? "").slice(0, 500),
+        duration: f.duration,
+        screenshotPath: f.screenshotPath,
+      },
+    });
+  }
+}
+
+async function persistRcaResults(storyId: number, results: any[]): Promise<void> {
+  for (const r of results || []) {
+    await executeTool("saveMemory", {
+      key: `rca:${storyId}:${(r.testName ?? "unknown").slice(0, 80)}:${Date.now()}`,
+      type: "rca_result",
+      data: { storyId, ...r },
+    });
+  }
+}
+
+async function persistAgentResult(
+  agentSlug: string,
+  storyId: unknown,
+  result: unknown
+): Promise<void> {
+  if (!result || typeof result !== "object") return;
+  const typeMap: Record<string, string> = {
+    "requirement-agent": "requirement_analysis",
+    "test-designer-agent": "test_design",
+    "automation-agent": "generated_tests",
+    "rca-agent": "rca_result",
+    "reviewer-agent": "review",
+    "maintenance-agent": "maintenance_fix",
+    "clarifier-agent": "clarification",
+  };
+  const memType = typeMap[agentSlug];
+  if (!memType) return;
+  const key = `${memType}:${storyId ?? "unknown"}`;
+  await executeTool("saveMemory", { key, type: memType, data: result });
 }
 
 /**
@@ -268,13 +357,14 @@ IMPORTANT: You have access to MCP tools. When you need to use a tool, include a 
  */
 function buildToolArgs(
   toolName: string,
-  context: Record<string, unknown>
+  context: Record<string, unknown>,
+  agentSlug: string = "orchestrator"
 ): Record<string, unknown> | null {
   switch (toolName) {
     case "getUserStory":
       return context.storyId ? { storyId: context.storyId } : null;
     case "logEvent":
-      return { agent: "orchestrator", event: "step_executed", data: {} };
+      return { agent: agentSlug, event: "tool_invoked", data: { storyId: context.storyId } };
     case "saveMemory":
       return null; // Agent decides what to save
     case "retrieveMemory":

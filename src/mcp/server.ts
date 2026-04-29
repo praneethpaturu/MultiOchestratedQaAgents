@@ -65,7 +65,11 @@ function registerTools(
 
 // ─── Initialize ───
 
+let initialized = false;
+
 export function initMCPServer(): void {
+  if (initialized) return;
+
   log.info("Initializing MCP tool registry...");
 
   registerTools(adoToolDefinitions, adoToolHandlers);
@@ -74,6 +78,7 @@ export function initMCPServer(): void {
   registerTools(rcaToolDefinitions, rcaToolHandlers);
   registerTools(loggingToolDefinitions, loggingToolHandlers);
 
+  initialized = true;
   log.info(`MCP server ready: ${toolDefinitions.size} tools registered`);
   for (const [name] of toolDefinitions) {
     log.info(`  ▸ ${name}`);
@@ -143,49 +148,76 @@ export function getToolsForLLM(): Array<{
 
 // ─── stdio MCP transport (for VS Code integration) ───
 
-export async function startStdioTransport(): Promise<void> {
+export async function startStdioTransport(preBuffered?: Buffer[]): Promise<void> {
   log.info("Starting MCP stdio transport...");
 
-  process.stdin.setEncoding("utf-8");
-  let buffer = "";
+  let buffer = Buffer.alloc(0);
+  let processing = false;
 
-  process.stdin.on("data", async (chunk: string) => {
-    buffer += chunk;
+  async function processBuffer(): Promise<void> {
+    if (processing) return;
+    processing = true;
 
-    // Process complete JSON-RPC messages
-    while (true) {
-      const headerEnd = buffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) break;
+    try {
+      while (true) {
+        const headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd === -1) break;
 
-      const header = buffer.slice(0, headerEnd);
-      const contentLengthMatch = header.match(/Content-Length: (\d+)/);
-      if (!contentLengthMatch) break;
-
-      const contentLength = parseInt(contentLengthMatch[1], 10);
-      const bodyStart = headerEnd + 4;
-      if (buffer.length < bodyStart + contentLength) break;
-
-      const body = buffer.slice(bodyStart, bodyStart + contentLength);
-      buffer = buffer.slice(bodyStart + contentLength);
-
-      try {
-        const request = JSON.parse(body);
-        const response = await handleJsonRpc(request);
-        if (response) {
-          const responseBody = JSON.stringify(response);
-          process.stdout.write(
-            `Content-Length: ${Buffer.byteLength(responseBody)}\r\n\r\n${responseBody}`
-          );
+        const header = buffer.subarray(0, headerEnd).toString("utf-8");
+        const contentLengthMatch = header.match(/Content-Length:\s*(\d+)/i);
+        if (!contentLengthMatch) {
+          buffer = buffer.subarray(headerEnd + 4);
+          continue;
         }
-      } catch (err) {
-        log.error(`stdio parse error: ${(err as Error).message}`);
+
+        const contentLength = parseInt(contentLengthMatch[1], 10);
+        const bodyStart = headerEnd + 4;
+        if (buffer.length < bodyStart + contentLength) break;
+
+        const body = buffer.subarray(bodyStart, bodyStart + contentLength).toString("utf-8");
+        buffer = buffer.subarray(bodyStart + contentLength);
+
+        try {
+          const request = JSON.parse(body);
+          log.info(`stdio recv: ${request.method ?? "response"} (id=${request.id ?? "n/a"})`);
+          const response = await handleJsonRpc(request);
+          if (response) {
+            const responseBody = JSON.stringify(response);
+            const responseBytes = Buffer.byteLength(responseBody, "utf-8");
+            process.stdout.write(
+              `Content-Length: ${responseBytes}\r\n\r\n${responseBody}`
+            );
+            log.info(`stdio send: id=${response.id} (${responseBytes} bytes)`);
+          }
+        } catch (err) {
+          log.error(`stdio parse error: ${(err as Error).message}`);
+        }
       }
+    } finally {
+      processing = false;
     }
+  }
+
+  // Replay any data that arrived before this function was called
+  if (preBuffered && preBuffered.length > 0) {
+    buffer = Buffer.concat(preBuffered);
+    log.info(`Replaying ${buffer.length} pre-buffered bytes`);
+  }
+
+  // Listen for new data
+  process.stdin.on("data", (chunk: Buffer) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    processBuffer();
   });
 
   process.stdin.on("end", () => {
     log.info("MCP stdio transport closed");
   });
+
+  // Process any pre-buffered data now
+  if (buffer.length > 0) {
+    processBuffer();
+  }
 }
 
 async function handleJsonRpc(request: any): Promise<any> {

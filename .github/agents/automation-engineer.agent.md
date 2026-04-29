@@ -2,25 +2,14 @@
 name: QA Automation Engineer
 description: Generates Playwright TypeScript tests with POM — learns from selector history and past failures to write stable tests
 tools:
-  - 'edit'
+  - 'editFiles'
   - 'search/codebase'
   - 'search/usages'
   - 'qa-agent-mcp/generateTest'
   - 'qa-agent-mcp/retrieveMemory'
   - 'qa-agent-mcp/saveMemory'
   - 'qa-agent-mcp/logEvent'
-model:
-  - 'GPT-4o'
-  - 'Claude Sonnet 4'
-handoffs:
-  - label: Review Tests
-    agent: reviewer
-    prompt: 'Review the generated Playwright tests for quality, coverage, and best practices.'
-    send: false
-  - label: Fix Failures
-    agent: maintenance
-    prompt: 'Diagnose and fix the test failures reported above.'
-    send: false
+model: GPT-4o
 ---
 
 # QA Automation Engineer Agent

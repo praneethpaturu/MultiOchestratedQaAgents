@@ -6,14 +6,7 @@ tools:
   - 'qa-agent-mcp/retrieveMemory'
   - 'qa-agent-mcp/saveMemory'
   - 'qa-agent-mcp/logEvent'
-model:
-  - 'Claude Sonnet 4'
-  - 'GPT-4o'
-handoffs:
-  - label: Generate Playwright Tests
-    agent: automation-engineer
-    prompt: 'Generate Playwright TypeScript tests from the test cases above.'
-    send: false
+model: GPT-4o
 ---
 
 # QA Test Designer Agent

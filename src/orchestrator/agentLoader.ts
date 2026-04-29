@@ -115,17 +115,18 @@ function extractSection(md: string, heading: string): string {
 }
 
 function extractToolList(md: string): string[] {
-  const section = extractSection(md, "## MCP Tools Used");
-  if (!section) return [];
-
-  // Extract bullet points that look like tool names
+  const lines = md.split("\n");
   const tools: string[] = [];
-  const lines = section.split("\n");
+  let inSection = false;
   for (const line of lines) {
-    const match = line.match(/^[-*]\s+`?(\w+)`?\s/);
-    if (match) {
-      tools.push(match[1]);
+    if (/^##\s+MCP\s+Tools\s+Used\s*$/i.test(line)) {
+      inSection = true;
+      continue;
     }
+    if (inSection && /^##\s/.test(line)) break;
+    if (!inSection) continue;
+    const m = line.match(/^[-*]\s+`?(\w+)`?/);
+    if (m) tools.push(m[1]);
   }
   return tools;
 }

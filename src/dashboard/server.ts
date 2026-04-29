@@ -164,6 +164,8 @@ app.get("/api/agents", (_req, res) => {
 });
 
 // ─── Serve Dashboard UI ───
+// Note: DASHBOARD_HTML is declared below the route handlers for readability.
+// This is safe because Express route callbacks only execute after the module is fully loaded.
 app.get("/", (_req, res) => {
   res.type("html").send(DASHBOARD_HTML);
 });

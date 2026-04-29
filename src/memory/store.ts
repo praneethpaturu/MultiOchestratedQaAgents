@@ -38,6 +38,8 @@ function saveStore(store: MemoryStore): void {
   fs.writeFileSync(memoryPath(), JSON.stringify(store, null, 2));
 }
 
+const MAX_MEMORY_ENTRIES = 1000;
+
 export function addMemory(entry: Omit<MemoryEntry, "id" | "timestamp">): void {
   const store = loadStore();
   const newEntry: MemoryEntry = {
@@ -46,6 +48,10 @@ export function addMemory(entry: Omit<MemoryEntry, "id" | "timestamp">): void {
     timestamp: new Date().toISOString(),
   };
   store.entries.push(newEntry);
+  // Trim oldest entries to prevent unbounded growth
+  if (store.entries.length > MAX_MEMORY_ENTRIES) {
+    store.entries = store.entries.slice(-MAX_MEMORY_ENTRIES);
+  }
   saveStore(store);
   log.info(`Stored memory: ${newEntry.type} (${newEntry.id})`);
 }

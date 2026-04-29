@@ -2,43 +2,11 @@
 name: QA Orchestrator
 description: Central brain of the multi-agent QA system — analyzes requests, delegates to specialized agents, never does work itself
 tools:
-  - 'agent'
   - 'qa-agent-mcp/logEvent'
   - 'qa-agent-mcp/saveMemory'
   - 'qa-agent-mcp/retrieveMemory'
   - 'qa-agent-mcp/getUserStory'
-agents:
-  - 'clarifier'
-  - 'requirement-analyst'
-  - 'test-designer'
-  - 'automation-engineer'
-  - 'maintenance'
-  - 'rca'
-  - 'reviewer'
-model:
-  - 'GPT-4o'
-  - 'Claude Sonnet 4'
-handoffs:
-  - label: Clarify Story
-    agent: clarifier
-    prompt: 'Analyze this user story for ambiguities and missing information.'
-    send: false
-  - label: Analyze Requirements
-    agent: requirement-analyst
-    prompt: 'Extract requirements, scenarios, and edge cases from this story.'
-    send: false
-  - label: Design Tests
-    agent: test-designer
-    prompt: 'Create prioritized test cases from these requirements.'
-    send: false
-  - label: Generate Tests
-    agent: automation-engineer
-    prompt: 'Generate Playwright TypeScript tests from these test cases.'
-    send: false
-  - label: Review Pipeline
-    agent: reviewer
-    prompt: 'Review the complete pipeline output for quality and governance.'
-    send: false
+model: GPT-4o
 ---
 
 # QA Orchestrator — Central Intelligence
