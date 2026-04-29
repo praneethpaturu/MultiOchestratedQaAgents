@@ -163,6 +163,131 @@ app.get("/api/agents", (_req, res) => {
   res.json(agents);
 });
 
+// ─── Pipeline trigger ───
+type RunState = {
+  active: boolean;
+  storyId: number | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  result: "success" | "rejected" | "error" | null;
+  message: string | null;
+};
+const runState: RunState = {
+  active: false,
+  storyId: null,
+  startedAt: null,
+  finishedAt: null,
+  result: null,
+  message: null,
+};
+
+app.get("/api/run/status", (_req, res) => {
+  res.json(runState);
+});
+
+async function createAdoStory(opts: {
+  title: string;
+  description: string;
+  acceptanceCriteria?: string;
+}): Promise<{ id: number; url: string }> {
+  const org = config.ado.org;
+  const project = encodeURIComponent(config.ado.project);
+  const token = config.ado.token;
+  if (!org || !project || !token) throw new Error("ADO config missing in .env");
+
+  const auth = Buffer.from(`:${token}`).toString("base64");
+  const url = `https://dev.azure.com/${org}/${project}/_apis/wit/workitems/${encodeURIComponent("$Issue")}?api-version=${config.ado.apiVersion}`;
+
+  const body = [
+    { op: "add", path: "/fields/System.Title", value: opts.title },
+    { op: "add", path: "/fields/System.Description", value: opts.description },
+  ];
+  if (opts.acceptanceCriteria) {
+    body.push({
+      op: "add",
+      path: "/fields/Microsoft.VSTS.Common.AcceptanceCriteria",
+      value: opts.acceptanceCriteria,
+    });
+  }
+
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json-patch+json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`ADO create story HTTP ${r.status}: ${text.slice(0, 300)}`);
+  }
+  const data = (await r.json()) as { id: number; _links: { html: { href: string } } };
+  return { id: data.id, url: data._links.html.href };
+}
+
+function deriveTitle(requirement: string): string {
+  const firstLine = requirement.split("\n").map((l) => l.trim()).find(Boolean) ?? "Auto-generated";
+  return firstLine.length > 100 ? firstLine.slice(0, 97) + "..." : firstLine;
+}
+
+app.post("/api/run", async (req, res) => {
+  if (runState.active) {
+    return res.status(409).json({ error: "A pipeline run is already in progress", state: runState });
+  }
+
+  const { storyId: rawStoryId, requirement, baseUrl } = req.body ?? {};
+  let storyId: number;
+  let createdStoryUrl: string | undefined;
+
+  try {
+    if (typeof requirement === "string" && requirement.trim().length > 0) {
+      const description = baseUrl ? `<p>${requirement}</p><p><b>Target:</b> ${baseUrl}</p>` : `<p>${requirement}</p>`;
+      const story = await createAdoStory({
+        title: deriveTitle(requirement),
+        description,
+      });
+      storyId = story.id;
+      createdStoryUrl = story.url;
+      log.info(`Auto-created ADO story #${storyId} from requirement (${requirement.length} chars)`);
+    } else {
+      storyId = parseInt(String(rawStoryId ?? ""), 10);
+      if (!Number.isFinite(storyId) || storyId <= 0) {
+        return res.status(400).json({ error: "Provide either a positive storyId or a non-empty requirement" });
+      }
+    }
+  } catch (err) {
+    return res.status(502).json({ error: (err as Error).message });
+  }
+
+  if (typeof baseUrl === "string" && baseUrl.trim().length > 0) {
+    process.env.BASE_URL = baseUrl.trim();
+    log.info(`BASE_URL set to ${baseUrl.trim()} for this run`);
+  }
+
+  runState.active = true;
+  runState.storyId = storyId;
+  runState.startedAt = new Date().toISOString();
+  runState.finishedAt = null;
+  runState.result = null;
+  runState.message = `Pipeline started for story #${storyId}`;
+  log.info(`Triggered pipeline run via API for story #${storyId}`);
+  res.status(202).json({ accepted: true, storyId, createdStoryUrl, startedAt: runState.startedAt });
+
+  (async () => {
+    try {
+      const { runEngine } = await import("../orchestrator/engine.js");
+      const state = await runEngine({ storyId });
+      runState.result = state.reviewResult?.approved ? "success" : "rejected";
+      runState.message = `Pipeline finished for story #${storyId} — ${runState.result} (score: ${state.reviewResult?.score ?? "n/a"}/100, bugs: ${state.bugs.length})`;
+    } catch (err) {
+      runState.result = "error";
+      runState.message = `Pipeline failed: ${(err as Error).message}`;
+      log.error(runState.message);
+    } finally {
+      runState.active = false;
+      runState.finishedAt = new Date().toISOString();
+    }
+  })();
+});
+
 // ─── Serve Dashboard UI ───
 // Note: DASHBOARD_HTML is declared below the route handlers for readability.
 // This is safe because Express route callbacks only execute after the module is fully loaded.
@@ -333,8 +458,40 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   <h1>QA Agent Dashboard</h1>
   <span class="badge badge-live" id="statusBadge">Live</span>
   <div class="header-right">
+    <span id="runStatus" style="font-size:12px;color:var(--muted)"></span>
+    <button id="openRunPanel" class="refresh-btn" onclick="toggleRunPanel()" style="background:var(--green);color:#000;font-weight:600">▶ Run Pipeline</button>
     <span class="auto-badge" id="lastUpdate">—</span>
     <button class="refresh-btn" onclick="loadAll()">↻ Refresh</button>
+  </div>
+</div>
+
+<div id="runPanel" style="display:none;background:var(--surface);border-bottom:1px solid var(--border);padding:16px 20px">
+  <div style="display:flex;gap:6px;margin-bottom:12px">
+    <button id="modeRequirementBtn" class="refresh-btn" onclick="setRunMode('requirement')" style="background:var(--accent);color:#000;font-weight:600">New Requirement</button>
+    <button id="modeStoryIdBtn" class="refresh-btn" onclick="setRunMode('storyId')">Existing ADO Story</button>
+    <span style="margin-left:auto;color:var(--muted);font-size:12px;align-self:center">Either creates or uses an ADO Issue, then runs the full 8-agent pipeline against it.</span>
+  </div>
+
+  <div id="modeRequirement" style="display:flex;flex-direction:column;gap:10px">
+    <label style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Requirement / User Story</label>
+    <textarea id="requirementInput" placeholder="e.g. As a traveller, I want to search round-trip flights from Bengaluru to Delhi 14 days from today on makemytrip.com — verify the flights tab is selected by default, the search returns at least one card, and each card shows airline, times, duration, and price." rows="4" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:var(--radius);font-size:13px;font-family:inherit;resize:vertical">As a traveller, I want to search round-trip flights from Bengaluru to Delhi on makemytrip.com — verify the flights tab is selected by default, the search returns at least one result card, and each card shows airline, departure/arrival times, duration, and price.</textarea>
+
+    <label style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Target URL</label>
+    <input id="baseUrlInput" type="url" value="https://www.makemytrip.com" placeholder="https://example.com" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius);font-size:13px"/>
+
+    <div style="display:flex;gap:10px;align-items:center">
+      <button id="runRequirementBtn" class="refresh-btn" onclick="runWithRequirement()" style="background:var(--green);color:#000;font-weight:600;padding:8px 18px">▶ Create story & run pipeline</button>
+      <span style="color:var(--muted);font-size:12px">Pipeline takes ~80–100 seconds.</span>
+    </div>
+  </div>
+
+  <div id="modeStoryId" style="display:none;flex-direction:column;gap:10px">
+    <label style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px">ADO Story ID</label>
+    <input id="storyIdInput" type="number" value="171" placeholder="171" style="width:140px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius);font-size:13px"/>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button id="runStoryIdBtn" class="refresh-btn" onclick="runWithStoryId()" style="background:var(--green);color:#000;font-weight:600;padding:8px 18px">▶ Run pipeline</button>
+      <span style="color:var(--muted);font-size:12px">Uses the BASE_URL configured in .env.</span>
+    </div>
   </div>
 </div>
 
@@ -729,9 +886,97 @@ function renderLogs() {
   ).join('');
 }
 
+// ─── Pipeline trigger ───
+function toggleRunPanel() {
+  const panel = document.getElementById('runPanel');
+  panel.style.display = (panel.style.display === 'none' || !panel.style.display) ? 'block' : 'none';
+}
+
+function setRunMode(mode) {
+  const reqMode = document.getElementById('modeRequirement');
+  const idMode = document.getElementById('modeStoryId');
+  const reqBtn = document.getElementById('modeRequirementBtn');
+  const idBtn = document.getElementById('modeStoryIdBtn');
+  if (mode === 'requirement') {
+    reqMode.style.display = 'flex'; idMode.style.display = 'none';
+    reqBtn.style.background = 'var(--accent)'; reqBtn.style.color = '#000';
+    idBtn.style.background = 'var(--border)'; idBtn.style.color = 'var(--text)';
+  } else {
+    reqMode.style.display = 'none'; idMode.style.display = 'flex';
+    idBtn.style.background = 'var(--accent)'; idBtn.style.color = '#000';
+    reqBtn.style.background = 'var(--border)'; reqBtn.style.color = 'var(--text)';
+  }
+}
+
+async function triggerRun(payload, btn) {
+  const status = document.getElementById('runStatus');
+  btn.disabled = true; btn.style.opacity = '0.6';
+  status.textContent = 'Triggering...'; status.style.color = 'var(--muted)';
+  try {
+    const r = await fetch('/api/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const data = await r.json();
+    if (!r.ok) {
+      status.textContent = data.error || ('HTTP ' + r.status);
+      status.style.color = 'var(--red)';
+      btn.disabled = false; btn.style.opacity = '1';
+      return;
+    }
+    status.textContent = '▶ Running #' + data.storyId + (data.createdStoryUrl ? ' (auto-created)' : '') + '...';
+    status.style.color = 'var(--green)';
+    if (data.createdStoryUrl) console.log('Created ADO story:', data.createdStoryUrl);
+    document.getElementById('runPanel').style.display = 'none';
+    pollRunStatus();
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message; status.style.color = 'var(--red)';
+    btn.disabled = false; btn.style.opacity = '1';
+  }
+}
+
+function runWithRequirement() {
+  const requirement = document.getElementById('requirementInput').value.trim();
+  const baseUrl = document.getElementById('baseUrlInput').value.trim();
+  const status = document.getElementById('runStatus');
+  if (!requirement) { status.textContent = 'Enter a requirement'; status.style.color = 'var(--red)'; return; }
+  triggerRun({ requirement, baseUrl }, document.getElementById('runRequirementBtn'));
+}
+
+function runWithStoryId() {
+  const storyId = parseInt(document.getElementById('storyIdInput').value, 10);
+  const status = document.getElementById('runStatus');
+  if (!storyId || storyId <= 0) { status.textContent = 'Enter a story ID'; status.style.color = 'var(--red)'; return; }
+  triggerRun({ storyId }, document.getElementById('runStoryIdBtn'));
+}
+
+async function pollRunStatus() {
+  const btns = [document.getElementById('runRequirementBtn'), document.getElementById('runStoryIdBtn')].filter(Boolean);
+  const status = document.getElementById('runStatus');
+  try {
+    const r = await fetch('/api/run/status');
+    const s = await r.json();
+    if (s.active) {
+      const elapsed = s.startedAt ? Math.floor((Date.now() - new Date(s.startedAt).getTime()) / 1000) : 0;
+      status.textContent = '▶ Running #' + s.storyId + ' (' + elapsed + 's)';
+      status.style.color = 'var(--green)';
+      setTimeout(pollRunStatus, 2000);
+    } else {
+      btns.forEach(b => { b.disabled = false; b.style.opacity = '1'; });
+      if (s.result) {
+        const colors = { success: 'var(--green)', rejected: 'var(--orange)', error: 'var(--red)' };
+        status.textContent = (s.result === 'success' ? '✓' : s.result === 'rejected' ? '⚠' : '✗') + ' ' + s.message;
+        status.style.color = colors[s.result] || 'var(--muted)';
+      }
+      loadAll();
+    }
+  } catch {
+    setTimeout(pollRunStatus, 3000);
+  }
+}
+
 // ─── Init ───
 loadAll();
 setInterval(loadAll, 5000);
+// Resume status polling if a run was already active when page loaded
+fetch('/api/run/status').then(r=>r.json()).then(s=>{ if (s.active) pollRunStatus(); });
 </script>
 </body>
 </html>`;
