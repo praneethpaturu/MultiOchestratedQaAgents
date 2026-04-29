@@ -196,7 +196,7 @@ function computeAgentTimeline(sinceIso: string | null) {
   const since = sinceIso ? new Date(sinceIso).getTime() : 0;
   const recent = logs.filter((e: any) => new Date(e.timestamp).getTime() >= since - 1000);
 
-  const byAgent: Record<string, { started?: number; completed?: number; count: number }> = {};
+  const byAgent: Record<string, { started?: number; completed?: number; skipped?: boolean; count: number }> = {};
   for (const e of recent) {
     const slug = e.agent;
     if (!byAgent[slug]) byAgent[slug] = { count: 0 };
@@ -205,12 +205,14 @@ function computeAgentTimeline(sinceIso: string | null) {
       byAgent[slug].count += 1;
     } else if (e.event === "completed") {
       byAgent[slug].completed = new Date(e.timestamp).getTime();
+    } else if (e.event === "skipped") {
+      byAgent[slug].skipped = true;
     }
   }
 
   return PIPELINE_STEPS.map((step) => {
     const data = byAgent[step.slug];
-    let status: "pending" | "running" | "completed" = "pending";
+    let status: "pending" | "running" | "completed" | "skipped" = "pending";
     let durationMs: number | null = null;
     let elapsedMs: number | null = null;
     if (data?.started && data?.completed && data.completed >= data.started) {
@@ -219,6 +221,8 @@ function computeAgentTimeline(sinceIso: string | null) {
     } else if (data?.started) {
       status = "running";
       elapsedMs = Date.now() - data.started;
+    } else if (data?.skipped) {
+      status = "skipped";
     }
     return {
       slug: step.slug,
@@ -1043,13 +1047,15 @@ function renderPipelineTimeline(s) {
   steps.innerHTML = '';
   (s.agents || []).forEach((a, idx) => {
     const colors = {
-      pending:   { bg:'#21262d', border:'var(--border)',   text:'var(--muted)', icon:'⏳' },
-      running:   { bg:'#1f6feb33', border:'var(--accent)', text:'var(--accent)', icon:'▶' },
-      completed: { bg:'#23613e',   border:'var(--green)',  text:'#7ee787',      icon:'✓' },
+      pending:   { bg:'#21262d',  border:'var(--border)',  text:'var(--muted)',  icon:'⏳' },
+      running:   { bg:'#1f6feb33',border:'var(--accent)',  text:'var(--accent)', icon:'▶' },
+      completed: { bg:'#23613e',  border:'var(--green)',   text:'#7ee787',       icon:'✓' },
+      skipped:   { bg:'#3a2e16',  border:'var(--orange)',  text:'#e3b341',       icon:'⊘' },
     };
     const c = colors[a.status] || colors.pending;
     const time = a.status === 'completed' && a.durationMs ? (Math.round(a.durationMs/100)/10)+'s'
-               : a.status === 'running' && a.elapsedMs    ? (Math.floor(a.elapsedMs/1000))+'s…'
+               : a.status === 'running'   && a.elapsedMs   ? (Math.floor(a.elapsedMs/1000))+'s…'
+               : a.status === 'skipped'                    ? 'not needed'
                : '';
     const attempts = a.attempts > 1 ? ' ×'+a.attempts : '';
     const el = document.createElement('div');

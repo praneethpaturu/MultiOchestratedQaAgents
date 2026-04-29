@@ -116,9 +116,19 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
 
     // ── STEP 4: Run Tests ──
     const runStep = startStep(state, "playwright", "Execute tests");
+    await executeTool("logEvent", { agent: "playwright", event: "started", data: { storyId, attempt: 1 } });
     const runResult = await executeTool("runTests", {});
     state.testResults = runResult.result as any;
     completeStep(state, runStep, runResult.result);
+    await executeTool("logEvent", {
+      agent: "playwright",
+      event: "completed",
+      data: {
+        storyId,
+        passed: (runResult.result as any)?.passed,
+        failureCount: ((runResult.result as any)?.failures ?? []).length,
+      },
+    });
     await persistFailures(storyId, (runResult.result as any)?.failures ?? []);
 
     // ── STEP 5: Maintenance Loop ──
@@ -146,9 +156,19 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
       applyMaintenanceFixes(state.maintenanceFixes as any[]);
 
       // Re-run tests
+      await executeTool("logEvent", {
+        agent: "playwright",
+        event: "started",
+        data: { storyId, attempt: state.maintenanceAttempts + 1 },
+      });
       const rerunResult = await executeTool("runTests", {});
       currentFailures = (rerunResult.result as any)?.failures ?? [];
       state.testResults = rerunResult.result as any;
+      await executeTool("logEvent", {
+        agent: "playwright",
+        event: "completed",
+        data: { storyId, passed: currentFailures.length === 0, failureCount: currentFailures.length },
+      });
       await persistFailures(storyId, currentFailures);
 
       if (currentFailures.length === 0) {
@@ -158,25 +178,42 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
     }
 
     // ── STEP 6: RCA (if still failing) ──
+    if (currentFailures.length === 0) {
+      await executeTool("logEvent", {
+        agent: "rca-agent",
+        event: "skipped",
+        data: { storyId, reason: "all tests passing — no failures to analyse" },
+      });
+    }
     if (currentFailures.length > 0) {
       const rcaAgent = agentMap.get("rca-agent")!;
       const rcaStep = startStep(state, rcaAgent.slug, "Root cause analysis");
 
-      // Gather actual test code for RCA context
+      // Gather actual test code for RCA context (truncated to fit token budget)
       const testCodeSnippets = (currentFailures as any[])
+        .slice(0, 3)
         .map((f: any) => {
           try {
             const filePath = path.resolve(process.cwd(), "playwright/tests/generated", f.fileName ?? "");
-            return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
+            return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8").slice(0, 2000) : "";
           } catch { return ""; }
         })
         .filter(Boolean)
         .join("\n\n");
 
+      // Trim failures to keep RCA prompt under the rate limit
+      const trimmedFailures = (currentFailures as any[]).slice(0, 5).map((f: any) => ({
+        testName: f.testName,
+        fileName: f.fileName,
+        errorMessage: (f.errorMessage ?? "").slice(0, 600),
+        duration: f.duration,
+      }));
+
       const rcaResult = await invokeAgent(rcaAgent, {
-        failures: currentFailures,
+        failures: trimmedFailures,
         testCode: testCodeSnippets || "(test code not available)",
         maintenanceAttempts: state.maintenanceAttempts,
+        storyId,
       });
       state.rcaResults = (rcaResult as any)?.results ?? [];
       completeStep(state, rcaStep, rcaResult);
@@ -286,10 +323,11 @@ IMPORTANT: You have access to MCP tools. When you need to use a tool, include a 
     }
   }
 
+  const contextJson = stringifyContextWithBudget(context, 60_000);
   const response = await routeToModel({
     role: role as any,
     systemPrompt,
-    userPrompt: `Context (including tool results):\n${JSON.stringify(context, null, 2)}\n\nProduce your output as JSON.`,
+    userPrompt: `Context (including tool results):\n${contextJson}\n\nProduce your output as JSON.`,
     maxTokens: 6000,
   });
 
@@ -367,6 +405,30 @@ function applyMaintenanceFixes(fixes: any[]): void {
       log.warn(`Failed to write maintenance fix for ${fileName}: ${(err as Error).message}`);
     }
   }
+}
+
+/**
+ * Serialize a context object while staying within a character budget.
+ * Each value is JSON-stringified and truncated independently so the agent
+ * still receives partial context for every key rather than dropping fields.
+ */
+function stringifyContextWithBudget(context: Record<string, unknown>, charBudget: number): string {
+  const keys = Object.keys(context);
+  if (keys.length === 0) return "{}";
+  const perKey = Math.max(2_000, Math.floor(charBudget / keys.length));
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    let serialized = JSON.stringify(context[k]);
+    if (serialized && serialized.length > perKey) {
+      serialized = serialized.slice(0, perKey) + `…[truncated, ${serialized.length - perKey} chars omitted]`;
+    }
+    try { out[k] = JSON.parse(serialized); } catch { out[k] = serialized; }
+  }
+  const result = JSON.stringify(out, null, 2);
+  if (result.length > charBudget * 1.2) {
+    return result.slice(0, charBudget) + `\n…[overall context truncated to ${charBudget} chars]`;
+  }
+  return result;
 }
 
 function cleanWorkspace(): void {
