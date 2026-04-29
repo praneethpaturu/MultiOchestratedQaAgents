@@ -631,7 +631,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     </select>
   </div>
   <div class="table-wrap"><table class="table"><thead><tr>
-    <th></th><th>Key</th><th>Type</th><th>Time</th>
+    <th></th><th>Key</th><th>Type</th><th>Outcome</th><th>Time</th>
   </tr></thead><tbody id="testBody"></tbody></table></div>
 </div>
 
@@ -961,6 +961,34 @@ function renderAutomation() {
   body.innerHTML = html;
 }
 
+function buildPipelineOutcomeIndex() {
+  // For each storyId, collect all pipeline_summary entries sorted by time.
+  // A failure is "self-healed" if a later pipeline_summary for the same
+  // story exists with result === 'success'.
+  const summaries = (data.tests || []).filter(t => t.type === 'pipeline_summary');
+  const byStory = {};
+  for (const s of summaries) {
+    const sid = s.data?.storyId;
+    if (sid == null) continue;
+    if (!byStory[sid]) byStory[sid] = [];
+    byStory[sid].push({ ts: new Date(s.timestamp).getTime(), result: s.data?.result });
+  }
+  for (const sid of Object.keys(byStory)) byStory[sid].sort((a,b)=>a.ts-b.ts);
+  return byStory;
+}
+
+function classifyFailure(failure, outcomeIndex) {
+  const sid = failure.data?.storyId;
+  const ts = new Date(failure.timestamp).getTime();
+  const summaries = outcomeIndex[sid] || [];
+  const subsequent = summaries.find(s => s.ts >= ts);
+  if (!subsequent) return { label: 'pending', color: 'var(--muted)', icon: '…', bg: '#21262d' };
+  if (subsequent.result === 'success') return { label: 'self-healed', color: '#7ee787', icon: '↻ ✓', bg: '#23613e' };
+  if (subsequent.result === 'rejected_unresolved') return { label: 'unresolved', color: '#ff9492', icon: '✗', bg: '#67060c' };
+  if (subsequent.result === 'error') return { label: 'pipeline-errored', color: '#e3b341', icon: '⚠', bg: '#3a2e16' };
+  return { label: 'rejected', color: '#e3b341', icon: '⚠', bg: '#3a2e16' };
+}
+
 function renderTests() {
   const search = (document.getElementById('testSearch')?.value||'').toLowerCase();
   const type = document.getElementById('testTypeFilter')?.value||'';
@@ -969,17 +997,29 @@ function renderTests() {
   if (search) items = items.filter(t => JSON.stringify(t).toLowerCase().includes(search));
 
   const body = document.getElementById('testBody');
-  if (items.length === 0) { body.innerHTML = '<tr><td colspan="4" class="empty">No test data</td></tr>'; return; }
+  if (items.length === 0) { body.innerHTML = '<tr><td colspan="5" class="empty">No test data</td></tr>'; return; }
+
+  const outcomeIndex = buildPipelineOutcomeIndex();
 
   body.innerHTML = items.slice(0,100).map((t,i) => {
     const detailId = 'test-detail-'+i;
+    let statusCell = '<span class="badge badge-count">—</span>';
+    if (t.type === 'failure') {
+      const cls = classifyFailure(t, outcomeIndex);
+      statusCell = '<span style="background:'+cls.bg+';color:'+cls.color+';padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600">'+cls.icon+' '+cls.label+'</span>';
+    } else if (t.type === 'pipeline_summary') {
+      const r = t.data?.result || '?';
+      const colors = { success:'#7ee787', rejected:'#e3b341', rejected_unresolved:'#ff9492', error:'#ff9492' };
+      statusCell = '<span style="background:#0d1117;color:'+(colors[r]||'#c9d1d9')+';padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600">'+r+'</span>';
+    }
     return '<tr>'
       + '<td><span class="expand-btn" onclick="toggleDetail(\\''+detailId+'\\')">▶</span></td>'
       + '<td>'+esc(trunc(t.key||'—',50))+'</td>'
       + '<td><span class="badge badge-count">'+esc(t.type||'?')+'</span></td>'
+      + '<td>'+statusCell+'</td>'
       + '<td>'+fmtTime(t.timestamp)+'</td>'
       + '</tr>'
-      + '<tr class="detail-row" id="'+detailId+'"><td colspan="4"><div class="detail-content">'+esc(JSON.stringify(t.data||t,null,2))+'</div></td></tr>';
+      + '<tr class="detail-row" id="'+detailId+'"><td colspan="5"><div class="detail-content">'+esc(JSON.stringify(t.data||t,null,2))+'</div></td></tr>';
   }).join('');
 }
 

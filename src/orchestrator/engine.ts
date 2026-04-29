@@ -280,13 +280,42 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
     }
 
     finishPipeline(state);
+    await persistPipelineSummary(state);
     logSummary(state);
     return state;
   } catch (err) {
     log.error(`Engine failed: ${(err as Error).message}`);
     finishPipeline(state);
+    await persistPipelineSummary(state, (err as Error).message);
     throw err;
   }
+}
+
+async function persistPipelineSummary(state: PipelineState, errorMessage?: string): Promise<void> {
+  const finalFailureCount = ((state.testResults as any)?.failures ?? []).length;
+  const result = errorMessage
+    ? "error"
+    : state.reviewResult?.approved
+      ? "success"
+      : finalFailureCount > 0
+        ? "rejected_unresolved"
+        : "rejected";
+  await executeTool("saveMemory", {
+    key: `pipeline_summary:${state.storyId}:${Date.now()}`,
+    type: "pipeline_summary",
+    data: {
+      storyId: state.storyId,
+      storyTitle: state.storyTitle,
+      result,
+      score: state.reviewResult?.score ?? null,
+      finalFailureCount,
+      maintenanceAttempts: state.maintenanceAttempts,
+      reviewerLoops: state.reviewerLoops,
+      bugsFiled: state.bugs.length,
+      finishedAt: new Date().toISOString(),
+      errorMessage: errorMessage ?? null,
+    },
+  });
 }
 
 // ─── Invoke Agent via LLM ───
