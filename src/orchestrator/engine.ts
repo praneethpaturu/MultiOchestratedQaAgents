@@ -65,6 +65,8 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
   log.info(`  MCP Tools: ${listTools().length}`);
   log.info(`══════════════════════════════════════════`);
 
+  cleanWorkspace();
+
   try {
     // ── STEP 1: Requirement Analysis ──
     const reqAgent = agentMap.get("requirement-agent")!;
@@ -131,12 +133,17 @@ export async function runEngine(options: EngineOptions): Promise<PipelineState> 
       const maintAgent = agentMap.get("maintenance-agent")!;
       const maintStep = startStep(state, maintAgent.slug, `Maintenance attempt ${state.maintenanceAttempts}`);
 
+      const filesInPlay = collectGeneratedFilesForFailures(currentFailures);
+
       const maintResult = await invokeAgent(maintAgent, {
         failures: currentFailures,
-        testCode: "// loaded from generated files",
+        testCode: filesInPlay.combined,
+        fileMap: filesInPlay.byFile,
       });
       state.maintenanceFixes = (maintResult as any)?.fixes ?? [];
       completeStep(state, maintStep, maintResult);
+
+      applyMaintenanceFixes(state.maintenanceFixes as any[]);
 
       // Re-run tests
       const rerunResult = await executeTool("runTests", {});
@@ -304,6 +311,88 @@ IMPORTANT: You have access to MCP tools. When you need to use a tool, include a 
   return parsed;
 }
 
+function collectGeneratedFilesForFailures(failures: any[]): { combined: string; byFile: Record<string, string> } {
+  const genDir = path.resolve(process.cwd(), "playwright/tests/generated");
+  const pagesDir = path.resolve(process.cwd(), "playwright/pages");
+  const byFile: Record<string, string> = {};
+
+  // Always include all current test specs + page objects so the agent has context
+  for (const dir of [genDir, pagesDir]) {
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith(".ts") && !f.endsWith(".js")) continue;
+      if (f === ".gitkeep") continue;
+      try {
+        byFile[f] = fs.readFileSync(path.join(dir, f), "utf-8");
+      } catch {}
+    }
+  }
+  const combined = Object.entries(byFile)
+    .map(([name, code]) => `// ── ${name} ──\n${code}`)
+    .join("\n\n");
+  return { combined, byFile };
+}
+
+function applyMaintenanceFixes(fixes: any[]): void {
+  if (!Array.isArray(fixes) || fixes.length === 0) return;
+  const genDir = path.resolve(process.cwd(), "playwright/tests/generated");
+  const pagesDir = path.resolve(process.cwd(), "playwright/pages");
+
+  for (const fix of fixes) {
+    const fileName: string | undefined = fix?.fileName;
+    const fixedCode: string | undefined = fix?.fixedCode ?? fix?.code;
+    if (!fileName || !fixedCode) continue;
+
+    // Sanity: a complete file must contain at least one import statement.
+    // The maintenance agent occasionally returns only the changed snippet,
+    // which would clobber the whole file with one line.
+    const looksLikeCompleteFile =
+      /\bimport\s+/.test(fixedCode) ||
+      /\b(export\s+(class|default|function)|module\.exports)\b/.test(fixedCode);
+    if (!looksLikeCompleteFile) {
+      log.warn(`Skipping maintenance fix for ${fileName}: returned content looks like a snippet, not a complete file (${fixedCode.length} chars)`);
+      continue;
+    }
+
+    // Decide target dir: if filename looks like a page object, write under pages/
+    const isPageObject = /Page\.(ts|js)$/.test(fileName) || /\bpages\//.test(fileName);
+    const target = isPageObject
+      ? path.join(pagesDir, path.basename(fileName))
+      : path.join(genDir, path.basename(fileName));
+
+    try {
+      fs.writeFileSync(target, fixedCode);
+      log.info(`Maintenance fix applied: ${path.basename(target)} (${fixedCode.length} chars)`);
+    } catch (err) {
+      log.warn(`Failed to write maintenance fix for ${fileName}: ${(err as Error).message}`);
+    }
+  }
+}
+
+function cleanWorkspace(): void {
+  const genDir = path.resolve(process.cwd(), "playwright/tests/generated");
+  const pagesDir = path.resolve(process.cwd(), "playwright/pages");
+  const reportsDir = path.resolve(process.cwd(), "reports");
+
+  if (fs.existsSync(genDir)) {
+    for (const f of fs.readdirSync(genDir)) {
+      if (f === ".gitkeep") continue;
+      try { fs.unlinkSync(path.join(genDir, f)); } catch {}
+    }
+  }
+  if (fs.existsSync(pagesDir)) {
+    for (const f of fs.readdirSync(pagesDir)) {
+      if (f === "BasePage.ts") continue;
+      try { fs.unlinkSync(path.join(pagesDir, f)); } catch {}
+    }
+  }
+  if (fs.existsSync(reportsDir)) {
+    try { fs.rmSync(reportsDir, { recursive: true, force: true }); } catch {}
+  }
+
+  log.info(`Cleaned workspace: tests/generated, pages, reports`);
+}
+
 async function persistFailures(storyId: number, failures: any[]): Promise<void> {
   for (const f of failures || []) {
     await executeTool("saveMemory", {
@@ -383,6 +472,11 @@ function buildToolArgs(
       return context.failures ? { failures: context.failures, testCode: context.testCode ?? "" } : null;
     case "calculateConfidence":
       return null; // RCA agent computes this per-result
+    case "browserSnapshot": {
+      const baseUrl = process.env.BASE_URL;
+      if (!baseUrl || baseUrl === "https://example.com") return null;
+      return { url: baseUrl, maxElements: 60 };
+    }
     default:
       return null;
   }

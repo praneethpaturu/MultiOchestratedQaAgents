@@ -29,18 +29,25 @@ gpt-4o (code-optimized)
 ```
 
 ## MCP Tools Used
+- `browserSnapshot` — **CALL THIS FIRST**. Opens the BASE_URL in a real headless browser and returns the live accessibility tree. Use the actual roles/names/placeholders/inputNames you see here as your selectors. Never invent `data-testid` attributes you haven't observed.
 - `generateTest` — Generate Playwright test code from a test case specification
 - `retrieveMemory` — Load historical selector fixes for self-healing hints
 - `saveMemory` — Store generated tests for maintenance agent
 
 ## Instructions
 
-1. **Load selector history** for self-healing:
+1. **Snapshot the target page first** so you know which selectors actually exist:
+   ```
+   browserSnapshot({ url: <BASE_URL>, maxElements: 60 })
+   ```
+   Returns interactive elements with their `role`, `name`, `placeholder`, `inputName`, `id`, `type`. Use only selectors that match what you see here.
+
+2. **Load selector history** for self-healing:
    ```
    retrieveMemory({ key: "selector_fixes", type: "selector_fix" })
    ```
 
-2. **Filter automatable tests** from the test design:
+3. **Filter automatable tests** from the test design:
    - Only process test cases where `automatable: true`
 
 3. **For each automatable test case**, use the `generateTest` tool:
@@ -54,7 +61,14 @@ gpt-4o (code-optimized)
 
 4. **Playwright best practices** (enforce in generated code):
    - Use Page Object Model — one class per page
-   - Selector priority: `data-testid` > `getByRole` > `getByLabel` > CSS (never XPath)
+   - **Selector priority** (use the FIRST applicable for the target site):
+     - `getByRole(role, { name })` — most stable, works everywhere
+     - `getByText(/regex/)` — text-based, language-aware
+     - `getByLabel(name)` — for form inputs with labels
+     - `getByPlaceholder(name)` — for form inputs without labels
+     - `data-testid` — ONLY if the target app is known to add them (most public sites do not). Do NOT default to data-testid for unknown sites.
+     - CSS as a last resort. Never XPath.
+   - When testing public/third-party websites you don't control, ALWAYS prefer getByRole/getByText/getByLabel over data-testid
    - Always use Playwright waits (`expect` with polling, `waitForSelector`)
    - Each test must be independent and idempotent
    - Use `test.describe` blocks for grouping
@@ -73,9 +87,9 @@ gpt-4o (code-optimized)
 
      constructor(page: Page) {
        this.page = page;
-       this.emailInput = page.getByTestId("email-input");
-       this.passwordInput = page.getByTestId("password-input");
-       this.submitButton = page.getByRole("button", { name: "Login" });
+       this.emailInput = page.getByLabel("Email");
+       this.passwordInput = page.getByLabel("Password");
+       this.submitButton = page.getByRole("button", { name: /log ?in|sign ?in/i });
      }
 
      async navigate() { await this.page.goto("/login"); }

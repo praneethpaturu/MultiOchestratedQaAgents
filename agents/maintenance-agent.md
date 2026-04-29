@@ -16,16 +16,19 @@ gpt-4o (debug-optimized)
   "fixes": [
     {
       "testName": "string",
-      "fileName": "string",
-      "originalCode": "string",
-      "fixedCode": "string",
+      "fileName": "string (exact file name from fileMap)",
+      "originalCode": "string (the full original file contents)",
+      "fixedCode": "string (the FULL file contents with the fix applied — NEVER a snippet, diff, or single line. Must include imports, class declaration, all methods, and end with the same module exports)",
       "fixDescription": "string"
     }
   ]
 }
 ```
 
+**CRITICAL**: `fixedCode` MUST contain the complete file ready to be written to disk and compile cleanly. If you only need to change one selector, copy the entire original file from `fileMap[fileName]` and only modify the affected line. Never return a snippet, diff, or partial file — the orchestrator will overwrite the entire file with whatever you return.
+
 ## MCP Tools Used
+- `browserSnapshot` — **CALL THIS FIRST when fixing locator failures**. Opens the BASE_URL in a real headless browser and returns the live accessibility tree. Use this to find the actual roles/names/placeholders of the elements you need to interact with — never guess.
 - `getFailures` — Retrieve detailed test failure information from the last run
 - `generateTest` — Re-generate fixed test code
 - `retrieveMemory` — Load past selector fixes for pattern matching
@@ -34,12 +37,18 @@ gpt-4o (debug-optimized)
 
 ## Instructions
 
-1. **Get failure details** using the MCP tool:
+1. **Snapshot the target page first** to see the real selectors that exist NOW:
+   ```
+   browserSnapshot({ url: <BASE_URL>, maxElements: 60 })
+   ```
+   This returns the actual roles/names/placeholders/inputNames currently on the page. The failures you're given probably failed because the test guessed selectors that don't match. Compare what the test expects vs. what the snapshot shows.
+
+2. **Get failure details** using the MCP tool:
    ```
    getFailures({ runId: <latest> })
    ```
 
-2. **Load past fixes** for pattern matching:
+3. **Load past fixes** for pattern matching:
    ```
    retrieveMemory({ key: "selector_fixes", type: "selector_fix" })
    ```

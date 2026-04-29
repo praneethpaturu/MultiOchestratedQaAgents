@@ -18,6 +18,7 @@ import { playwrightToolDefinitions, playwrightToolHandlers } from "./tools/playw
 import { memoryToolDefinitions, memoryToolHandlers } from "./tools/memory.js";
 import { rcaToolDefinitions, rcaToolHandlers } from "./tools/rca.js";
 import { loggingToolDefinitions, loggingToolHandlers } from "./tools/logging.js";
+import { skillsToolDefinitions, skillsToolHandlers } from "./tools/skills.js";
 
 const log = agentLogger("MCPServer");
 
@@ -77,6 +78,7 @@ export function initMCPServer(): void {
   registerTools(memoryToolDefinitions, memoryToolHandlers);
   registerTools(rcaToolDefinitions, rcaToolHandlers);
   registerTools(loggingToolDefinitions, loggingToolHandlers);
+  registerTools(skillsToolDefinitions, skillsToolHandlers);
 
   initialized = true;
   log.info(`MCP server ready: ${toolDefinitions.size} tools registered`);

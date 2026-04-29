@@ -181,8 +181,59 @@ const runState: RunState = {
   message: null,
 };
 
+const PIPELINE_STEPS = [
+  { slug: "requirement-agent", name: "Requirement Analyst" },
+  { slug: "test-designer-agent", name: "Test Designer" },
+  { slug: "automation-agent", name: "Automation Engineer" },
+  { slug: "playwright", name: "Playwright Execution" },
+  { slug: "maintenance-agent", name: "Maintenance & Self-heal" },
+  { slug: "rca-agent", name: "Root Cause Analysis" },
+  { slug: "reviewer-agent", name: "Reviewer (Governance)" },
+];
+
+function computeAgentTimeline(sinceIso: string | null) {
+  const logs = readJsonSafe("logs.json");
+  const since = sinceIso ? new Date(sinceIso).getTime() : 0;
+  const recent = logs.filter((e: any) => new Date(e.timestamp).getTime() >= since - 1000);
+
+  const byAgent: Record<string, { started?: number; completed?: number; count: number }> = {};
+  for (const e of recent) {
+    const slug = e.agent;
+    if (!byAgent[slug]) byAgent[slug] = { count: 0 };
+    if (e.event === "started") {
+      byAgent[slug].started = byAgent[slug].started ?? new Date(e.timestamp).getTime();
+      byAgent[slug].count += 1;
+    } else if (e.event === "completed") {
+      byAgent[slug].completed = new Date(e.timestamp).getTime();
+    }
+  }
+
+  return PIPELINE_STEPS.map((step) => {
+    const data = byAgent[step.slug];
+    let status: "pending" | "running" | "completed" = "pending";
+    let durationMs: number | null = null;
+    let elapsedMs: number | null = null;
+    if (data?.started && data?.completed && data.completed >= data.started) {
+      status = "completed";
+      durationMs = data.completed - data.started;
+    } else if (data?.started) {
+      status = "running";
+      elapsedMs = Date.now() - data.started;
+    }
+    return {
+      slug: step.slug,
+      name: step.name,
+      status,
+      durationMs,
+      elapsedMs,
+      attempts: data?.count ?? 0,
+    };
+  });
+}
+
 app.get("/api/run/status", (_req, res) => {
-  res.json(runState);
+  const agents = computeAgentTimeline(runState.startedAt);
+  res.json({ ...runState, agents });
 });
 
 async function createAdoStory(opts: {
@@ -465,6 +516,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   </div>
 </div>
 
+<div id="pipelineTimeline" style="display:none;background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+    <span id="pipelineHeader" style="font-size:13px;font-weight:600;color:var(--text)">Pipeline Run</span>
+    <span id="pipelineSubheader" style="font-size:12px;color:var(--muted)"></span>
+    <span id="pipelineDuration" style="margin-left:auto;font-size:12px;color:var(--muted)"></span>
+  </div>
+  <div id="pipelineSteps" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+</div>
+
 <div id="runPanel" style="display:none;background:var(--surface);border-bottom:1px solid var(--border);padding:16px 20px">
   <div style="display:flex;gap:6px;margin-bottom:12px">
     <button id="modeRequirementBtn" class="refresh-btn" onclick="setRunMode('requirement')" style="background:var(--accent);color:#000;font-weight:600">New Requirement</button>
@@ -485,7 +545,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     </div>
   </div>
 
-  <div id="modeStoryId" style="display:none;flex-direction:column;gap:10px">
+  <div id="modeStoryId" style="display:none;flex-direction:column;gap:10px" data-default="flex">
     <label style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px">ADO Story ID</label>
     <input id="storyIdInput" type="number" value="171" placeholder="171" style="width:140px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius);font-size:13px"/>
     <div style="display:flex;gap:10px;align-items:center">
@@ -947,17 +1007,72 @@ function runWithStoryId() {
   triggerRun({ storyId }, document.getElementById('runStoryIdBtn'));
 }
 
+function renderPipelineTimeline(s) {
+  const panel = document.getElementById('pipelineTimeline');
+  if (!s || (!s.active && !s.startedAt)) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+
+  const header = document.getElementById('pipelineHeader');
+  const sub = document.getElementById('pipelineSubheader');
+  const dur = document.getElementById('pipelineDuration');
+
+  if (s.active) {
+    header.textContent = '▶ Running pipeline for story #' + s.storyId;
+    header.style.color = 'var(--green)';
+  } else if (s.result === 'success') {
+    header.textContent = '✓ Last run: story #' + s.storyId + ' approved';
+    header.style.color = 'var(--green)';
+  } else if (s.result === 'rejected') {
+    header.textContent = '⚠ Last run: story #' + s.storyId + ' rejected';
+    header.style.color = 'var(--orange)';
+  } else if (s.result === 'error') {
+    header.textContent = '✗ Last run: story #' + s.storyId + ' errored';
+    header.style.color = 'var(--red)';
+  } else {
+    header.textContent = 'Last run';
+    header.style.color = 'var(--text)';
+  }
+  sub.textContent = s.message || '';
+
+  if (s.startedAt) {
+    const totalMs = (s.finishedAt ? new Date(s.finishedAt).getTime() : Date.now()) - new Date(s.startedAt).getTime();
+    dur.textContent = (s.active ? 'elapsed ' : 'finished in ') + Math.floor(totalMs / 1000) + 's';
+  } else { dur.textContent = ''; }
+
+  const steps = document.getElementById('pipelineSteps');
+  steps.innerHTML = '';
+  (s.agents || []).forEach((a, idx) => {
+    const colors = {
+      pending:   { bg:'#21262d', border:'var(--border)',   text:'var(--muted)', icon:'⏳' },
+      running:   { bg:'#1f6feb33', border:'var(--accent)', text:'var(--accent)', icon:'▶' },
+      completed: { bg:'#23613e',   border:'var(--green)',  text:'#7ee787',      icon:'✓' },
+    };
+    const c = colors[a.status] || colors.pending;
+    const time = a.status === 'completed' && a.durationMs ? (Math.round(a.durationMs/100)/10)+'s'
+               : a.status === 'running' && a.elapsedMs    ? (Math.floor(a.elapsedMs/1000))+'s…'
+               : '';
+    const attempts = a.attempts > 1 ? ' ×'+a.attempts : '';
+    const el = document.createElement('div');
+    el.style.cssText = 'flex:1;min-width:135px;background:'+c.bg+';border:1px solid '+c.border+';border-radius:var(--radius);padding:8px 12px';
+    el.innerHTML = '<div style="font-size:11px;color:var(--muted);font-weight:600;letter-spacing:0.5px">STEP '+(idx+1)+attempts+'</div>'
+                 + '<div style="font-size:13px;color:'+c.text+';font-weight:600;margin-top:2px">'+c.icon+' '+a.name+'</div>'
+                 + '<div style="font-size:11px;color:var(--muted);margin-top:2px">'+(time||a.status)+'</div>';
+    steps.appendChild(el);
+  });
+}
+
 async function pollRunStatus() {
   const btns = [document.getElementById('runRequirementBtn'), document.getElementById('runStoryIdBtn')].filter(Boolean);
   const status = document.getElementById('runStatus');
   try {
     const r = await fetch('/api/run/status');
     const s = await r.json();
+    renderPipelineTimeline(s);
     if (s.active) {
       const elapsed = s.startedAt ? Math.floor((Date.now() - new Date(s.startedAt).getTime()) / 1000) : 0;
       status.textContent = '▶ Running #' + s.storyId + ' (' + elapsed + 's)';
       status.style.color = 'var(--green)';
-      setTimeout(pollRunStatus, 2000);
+      setTimeout(pollRunStatus, 1500);
     } else {
       btns.forEach(b => { b.disabled = false; b.style.opacity = '1'; });
       if (s.result) {
@@ -975,8 +1090,8 @@ async function pollRunStatus() {
 // ─── Init ───
 loadAll();
 setInterval(loadAll, 5000);
-// Resume status polling if a run was already active when page loaded
-fetch('/api/run/status').then(r=>r.json()).then(s=>{ if (s.active) pollRunStatus(); });
+// Render the pipeline timeline whenever there's run state (active or finished)
+fetch('/api/run/status').then(r=>r.json()).then(s=>{ renderPipelineTimeline(s); if (s.active) pollRunStatus(); });
 </script>
 </body>
 </html>`;

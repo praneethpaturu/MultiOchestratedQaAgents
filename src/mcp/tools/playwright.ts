@@ -1,14 +1,19 @@
 /**
  * MCP Tools: Playwright
  *
- * generateTest — Generate Playwright test code from a test case spec
- * runTests — Execute Playwright tests and return results
- * getFailures — Parse and return failure details from the last run
+ * generateTest      — Generate Playwright test code from a test case spec
+ * runTests          — Execute Playwright tests and return results
+ * getFailures       — Parse and return failure details from the last run
+ * browserSnapshot   — Open a URL in a real browser and return the live
+ *                     accessibility tree so agents can pick selectors
+ *                     that actually exist on the page (no hallucinated
+ *                     data-testid attributes).
  */
 
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import { chromium } from "playwright";
 import type { MCPToolDefinition, MCPToolHandler } from "../server.js";
 import { routeToModel } from "../../utils/router.js";
 import { extractJSON } from "../../utils/helpers.js";
@@ -55,6 +60,20 @@ export const playwrightToolDefinitions: MCPToolDefinition[] = [
       properties: {
         runId: { type: "string", description: "Run identifier (default: latest)" },
       },
+    },
+  },
+  {
+    name: "browserSnapshot",
+    description:
+      "Open a URL in a real Chromium browser and return the live accessibility tree (interactive elements with their roles, names, labels, and types) plus the page title. Use this BEFORE generating Playwright selectors so the selectors you choose actually exist on the page — never guess data-testid attributes that may not be there.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "URL to open (e.g. https://en.wikipedia.org)" },
+        waitForSelector: { type: "string", description: "Optional selector to wait for before snapshotting" },
+        maxElements: { type: "number", description: "Max interactive elements to return (default 50)" },
+      },
+      required: ["url"],
     },
   },
 ];
@@ -133,6 +152,70 @@ export const playwrightToolHandlers: Record<string, MCPToolHandler> = {
 
   async getFailures(args: Record<string, unknown>) {
     return { failures: parseFailures() };
+  },
+
+  async browserSnapshot(args: Record<string, unknown>) {
+    const url = args.url as string;
+    const waitForSelector = args.waitForSelector as string | undefined;
+    const maxElements = (args.maxElements as number) ?? 50;
+    if (!url) throw new Error("url is required");
+
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const context = await browser.newContext({
+        userAgent:
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        viewport: { width: 1280, height: 800 },
+      });
+      const page = await context.newPage();
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      if (waitForSelector) {
+        await page.waitForSelector(waitForSelector, { timeout: 10000 }).catch(() => {});
+      }
+
+      const title = await page.title();
+      const finalUrl = page.url();
+
+      // Pull a flat list of interactive elements with their accessibility properties
+      const elements = await page.evaluate((max: number) => {
+        const out: Array<Record<string, unknown>> = [];
+        const selector = "input, button, a, select, textarea, [role], [aria-label], [data-testid], [name], h1, h2, [contenteditable]";
+        const nodes = Array.from(document.querySelectorAll(selector)).slice(0, max);
+        for (const el of nodes) {
+          const node = el as HTMLElement;
+          const rect = node.getBoundingClientRect();
+          const visible = rect.width > 0 && rect.height > 0;
+          const tag = node.tagName.toLowerCase();
+          const explicitRole = node.getAttribute("role");
+          let inferredRole: string | null = null;
+          if (tag === "a" && (node as HTMLAnchorElement).href) inferredRole = "link";
+          else if (tag === "button") inferredRole = "button";
+          else if (tag === "h1" || tag === "h2") inferredRole = "heading";
+          else if (tag === "input") {
+            const t = (node as HTMLInputElement).type;
+            inferredRole = t === "search" ? "searchbox" : t === "checkbox" ? "checkbox" : t === "radio" ? "radio" : t === "submit" || t === "button" ? "button" : "textbox";
+          } else if (tag === "textarea") inferredRole = "textbox";
+          else if (tag === "select") inferredRole = "combobox";
+          out.push({
+            tag,
+            role: explicitRole ?? inferredRole,
+            name: node.getAttribute("aria-label") ?? ((node.textContent ?? "").trim().slice(0, 80) || null),
+            label: (node as HTMLInputElement).labels?.[0]?.textContent?.trim() ?? null,
+            placeholder: (node as HTMLInputElement).placeholder ?? null,
+            type: (node as HTMLInputElement).type ?? null,
+            inputName: (node as HTMLInputElement).name ?? null,
+            id: node.id || null,
+            testid: node.getAttribute("data-testid"),
+            visible,
+          });
+        }
+        return out;
+      }, maxElements);
+
+      return { url: finalUrl, title, elementCount: elements.length, elements };
+    } finally {
+      await browser.close();
+    }
   },
 };
 
